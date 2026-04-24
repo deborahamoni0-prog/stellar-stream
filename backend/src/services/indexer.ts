@@ -65,14 +65,19 @@ async function indexEvents(): Promise<void> {
     if (lastProcessedLedger === 0) {
       // First run - attempt to load last processed ledger from database
       const row = db
-        .prepare("SELECT last_ledger FROM indexer_cursor WHERE id = ?")
-        .get(contractId) as { last_ledger: number } | undefined;
+        .prepare("SELECT last_ledger_sequence FROM indexer_cursor WHERE id = 1")
+        .get() as { last_ledger_sequence: number } | undefined;
 
       if (row) {
-        lastProcessedLedger = row.last_ledger;
+        lastProcessedLedger = row.last_ledger_sequence;
       } else {
-        // Fallback: start from recent history (last 100 ledgers)
-        lastProcessedLedger = Math.max(1, currentLedger - 100);
+        const envStart = process.env.INDEXER_START_LEDGER;
+
+        if (envStart) {
+          lastProcessedLedger = parseInt(envStart, 10);
+        } else {
+          lastProcessedLedger = currentLedger; // start from latest
+        }
       }
     }
 
@@ -99,9 +104,12 @@ async function indexEvents(): Promise<void> {
       }
 
       lastProcessedLedger = currentLedger;
-      db.prepare(
-        "INSERT INTO indexer_cursor (id, last_ledger) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET last_ledger = excluded.last_ledger",
-      ).run(contractId, lastProcessedLedger);
+      db.prepare(`
+  INSERT INTO indexer_cursor (id, last_ledger_sequence)
+  VALUES (1, ?)
+  ON CONFLICT(id)
+  DO UPDATE SET last_ledger_sequence = excluded.last_ledger_sequence
+`).run(lastProcessedLedger);
     })();
   } catch (err) {
     console.error("Failed to index events:", err);

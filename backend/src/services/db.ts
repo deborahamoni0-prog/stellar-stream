@@ -85,8 +85,8 @@ function migrate(): void {
     CREATE INDEX IF NOT EXISTS idx_webhook_dead_letters_failed_at ON webhook_dead_letters(failed_at);
 
     CREATE TABLE IF NOT EXISTS indexer_cursor (
-      id TEXT PRIMARY KEY,
-      last_ledger INTEGER NOT NULL
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      last_ledger_sequence INTEGER NOT NULL
     );
   `);
 }
