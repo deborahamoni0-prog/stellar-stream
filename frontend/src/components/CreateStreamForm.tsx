@@ -168,6 +168,39 @@ export function CreateStreamForm({
 
   const parsedApiError = apiError ? humaniseApiError(apiError) : null;
 
+  const startInMinsNum = Number(values.startInMinutes);
+  const durationHoursNum = Number(values.durationHours);
+  const estimatedEndLabel: string | null = (() => {
+    if (
+      values.startInMinutes === "" ||
+      values.durationHours === "" ||
+      isNaN(startInMinsNum) ||
+      isNaN(durationHoursNum) ||
+      durationHoursNum < 1 ||
+      !Number.isInteger(durationHoursNum)
+    ) {
+      return null;
+    }
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    const startAt =
+      startInMinsNum > 0 ? nowSeconds + Math.floor(startInMinsNum * 60) : nowSeconds;
+    const endAt = startAt + Math.floor(durationHoursNum * 3600);
+    const endDate = new Date(endAt * 1000);
+    const datePart = new Intl.DateTimeFormat("en-US", {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+      timeZone: "UTC",
+    }).format(endDate);
+    const timePart = new Intl.DateTimeFormat("en-US", {
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+      timeZone: "UTC",
+    }).format(endDate);
+    return `Ends: ${datePart} at ${timePart} UTC`;
+  })();
+
   return (
     <form onSubmit={handleSubmit}>
       {parsedApiError && (
@@ -302,6 +335,45 @@ export function CreateStreamForm({
             </span>
           )}
         </div>
+      </div>
+
+      {/* Duration */}
+      <div
+        className={`field-group${errors.durationHours ? " field-group--error" : ""}`}
+      >
+        <label htmlFor="stream-duration">
+          Duration (hours)
+          <span className="field-required" aria-hidden>
+            *
+          </span>
+        </label>
+        <input
+          id="stream-duration"
+          type="number"
+          min="1"
+          step="1"
+          value={values.durationHours}
+          onChange={set("durationHours")}
+          onBlur={blur("durationHours")}
+          onKeyDown={(e) => {
+            if (["e", "E", "+", "-", "."].includes(e.key)) e.preventDefault();
+          }}
+          aria-describedby={
+            errors.durationHours ? "duration-error" : "duration-hint"
+          }
+          aria-invalid={!!errors.durationHours}
+          required
+        />
+        {estimatedEndLabel && (
+          <span id="duration-hint" className="field-hint" aria-live="polite">
+            {estimatedEndLabel}
+          </span>
+        )}
+        {errors.durationHours && (
+          <span id="duration-error" className="field-error" role="alert">
+            {errors.durationHours}
+          </span>
+        )}
       </div>
 
       {/* Start In Minutes */}
