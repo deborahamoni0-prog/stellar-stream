@@ -21,6 +21,7 @@ import {
 } from "./services/eventHistory";
 import { fetchOpenIssues } from "./services/openIssues";
 import { initIndexer, startIndexer, getCircuitBreakerStatus } from "./services/indexer";
+import { register as metricsRegistry } from "./services/metrics";
 import { startReconciliationJob } from "./services/reconciliationJob";
 import { startWebhookWorker } from "./services/webhookWorker";
 import { getDeadLetters, countDeadLetters } from "./services/webhook";
@@ -146,10 +147,23 @@ app.get("/api/health", (_req: Request, res: Response) => {
   });
 });
 
-app.get("/api/metrics", (_req: Request, res: Response) => {
-  res.json({
-    indexer_circuit_breaker: getCircuitBreakerStatus(),
-  });
+const METRICS_AUTH = process.env.METRICS_AUTH?.trim() || null; // format: "user:password"
+
+app.get("/api/metrics", async (_req: Request, res: Response) => {
+  // Optional basic auth check
+  if (METRICS_AUTH) {
+    const authHeader = _req.headers.authorization;
+    const expected = "Basic " + Buffer.from(METRICS_AUTH).toString("base64");
+    if (!authHeader || authHeader !== expected) {
+      res.setHeader("WWW-Authenticate", 'Basic realm="metrics"');
+      res.status(401).send("Unauthorized");
+      return;
+    }
+  }
+
+  const output = await metricsRegistry.metrics();
+  res.setHeader("Content-Type", "text/plain; version=0.0.4");
+  res.send(output);
 });
 
 app.get("/api/assets", (_req: Request, res: Response) => {

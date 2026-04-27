@@ -7,6 +7,13 @@ import {
 } from "@stellar/stellar-sdk";
 import { recordEventWithDb } from "./eventHistory";
 import { getDb } from "./db";
+import {
+  eventsIndexedTotal,
+  ledgersScannedTotal,
+  lastIndexedLedger,
+  indexerErrorsTotal,
+  indexerCircuitState,
+} from "./metrics";
 
 let rpcServer: rpc.Server | null = null;
 let contractId: string | null = null;
@@ -67,6 +74,12 @@ class CircuitBreaker {
       console.log(`[Circuit Breaker] State Transition: ${this.state} -> ${newState}`);
       this.state = newState;
     }
+    // Keep gauge in sync whenever state is evaluated
+    const stateValue =
+      newState === CircuitState.CLOSED ? 0
+      : newState === CircuitState.HALF_OPEN ? 1
+      : 2;
+    indexerCircuitState.set(stateValue);
   }
 }
 
@@ -160,22 +173,28 @@ async function indexEvents(): Promise<void> {
       ],
     });
 
+    const startLedger = lastProcessedLedger; // captured before the tx updates it
+
     // Use a transaction to ensure events and cursor are updated atomically.
     // This prevents duplicate events if the process crashes mid-batch.
     db.transaction(() => {
       for (const event of events.events || []) {
         processEvent(db, event);
+        eventsIndexedTotal.inc();
       }
 
       lastProcessedLedger = currentLedger;
+      lastIndexedLedger.set(currentLedger);
       db.prepare(
         "INSERT INTO indexer_cursor (id, last_ledger) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET last_ledger = excluded.last_ledger",
       ).run(contractId, lastProcessedLedger);
     })();
 
+    ledgersScannedTotal.inc(currentLedger - startLedger);
     circuitBreaker.onSuccess();
   } catch (err) {
     circuitBreaker.onFailure();
+    indexerErrorsTotal.inc();
     console.error("Failed to index events:", err);
   }
 }
