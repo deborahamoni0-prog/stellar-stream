@@ -58,6 +58,7 @@ pub struct StreamCreated {
     pub start_time: u64,
     pub end_time: u64,
     pub cliff_seconds: u64,
+    pub metadata: Option<Map<String, String>>,
 }
 
 #[contracttype]
@@ -128,6 +129,7 @@ impl StellarStreamContract {
         start_time: u64,
         end_time: u64,
         cliff_seconds: u64,
+        metadata: Option<Map<String, String>>,
     ) -> u64 {
         sender.require_auth();
 
@@ -174,7 +176,7 @@ impl StellarStreamContract {
             canceled: false,
             paused: false,
             pause_started_at: None,
-            metadata: None,
+            metadata: metadata.clone(),
         };
 
         env.storage()
@@ -196,6 +198,7 @@ impl StellarStreamContract {
                 start_time,
                 end_time,
                 cliff_seconds,
+                metadata,
             },
         );
 
@@ -258,6 +261,7 @@ impl StellarStreamContract {
                 claimed_amount: 0,
                 start_time,
                 end_time,
+                cliff_seconds: 0,
                 canceled: false,
                 paused: false,
                 pause_started_at: None,
@@ -282,6 +286,7 @@ impl StellarStreamContract {
                     total_amount: allocation,
                     start_time,
                     end_time,
+                    cliff_seconds: 0,
                     metadata: None,
                 },
             );
