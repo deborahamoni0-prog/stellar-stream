@@ -31,9 +31,7 @@ type ViewMode = "dashboard" | "recipient" | "sender";
 
 function App() {
   const wallet = useFreighter();
-  const { showToast } = useToast();
-  const [viewMode, setViewMode] = useState<ViewMode>("dashboard");
-  const [detailStreamId, setDetailStreamId] = useState<string | null>(null);
+
   const [streams, setStreams] = useState<Stream[]>([]);
   const [issues, setIssues] = useState<OpenIssue[]>([]);
   const [formError, setFormError] = useState<string | null>(null);
@@ -44,35 +42,6 @@ function App() {
   const [loadingDashboard, setLoadingDashboard] = useState(true);
   const [initialLoading, setInitialLoading] = useState(true);
 
-  const { filters, filteredStreams, setFilter } = useStreamFilter(streams);
-  const wsUrl = import.meta.env.VITE_WS_URL ?? "";
-  const { lastMessage } = useWebSocket<{
-    eventType?: string;
-    type?: string;
-    status?: string;
-    streamId?: string;
-  }>(wsUrl);
-
-  const apiFilters: ListStreamsFilters = useMemo(
-    () => ({
-      status: filters.status,
-      sender: filters.sender,
-      recipient: filters.recipient,
-      asset: filters.assetCode,
-    }),
-    [filters],
-  );
-
-  const tableFilters: ListStreamsFilters = useMemo(
-    () => ({
-      status: filters.status,
-      sender: filters.sender,
-      recipient: filters.recipient,
-      asset: filters.assetCode,
-      q: "",
-    }),
-    [filters],
-  );
 
   const metrics = useMemo(() => {
     const activeCount = filteredStreams.filter(
@@ -209,51 +178,7 @@ function App() {
     }
   }
 
-  async function handlePause(streamId: string): Promise<void> {
-    try {
-      await pauseStream(streamId);
-      await refreshStreams(apiFilters);
-      showToast("Stream paused", "info");
-    } catch (err) {
-      if (err instanceof ApiError) {
-        showToast(`Pause failed (${err.statusCode}): ${err.message}`, "error");
-        return;
-      }
-      showToast(err instanceof Error ? err.message : "Failed to pause the stream.", "error");
-    }
-  }
 
-  async function handleResume(streamId: string): Promise<void> {
-    try {
-      await resumeStream(streamId);
-      await refreshStreams(apiFilters);
-      showToast("Stream resumed", "success");
-    } catch (err) {
-      if (err instanceof ApiError) {
-        showToast(`Resume failed (${err.statusCode}): ${err.message}`, "error");
-        return;
-      }
-      showToast(err instanceof Error ? err.message : "Failed to resume the stream.", "error");
-    }
-  }
-
-  async function handleUpdateStartTime(streamId: string, nextStartAt: number) {
-    try {
-      await updateStreamStartAt(streamId, nextStartAt);
-      await refreshStreams(apiFilters);
-      showToast("Start time updated", "success");
-    } catch (err) {
-      if (err instanceof ApiError) {
-        showToast(`Update failed (${err.statusCode}): ${err.message}`, "error");
-        return;
-      }
-      showToast("Failed to update stream start time", "error");
-    }
-  }
-
-  if (initialLoading && viewMode === "dashboard") {
-    return <div className="app-shell">Loading dashboard…</div>;
-  }
 
   return (
     <div className="app-shell">
@@ -263,6 +188,19 @@ function App() {
             <p className="eyebrow">Soroban-native MVP</p>
             <h1>StellarStream</h1>
           </div>
+          
+          {/* ── ISSUE #159: Theme Toggle Button ── */}
+          <button 
+            type="button" 
+            className="btn-ghost" 
+            onClick={toggleTheme}
+            style={{ marginRight: '0.5rem', fontSize: '1.2rem', minHeight: '36px', display: 'flex', alignItems: 'center' }}
+            aria-label="Toggle Dark Mode"
+          >
+            {theme === 'light' ? '🌙' : '☀️'}
+          </button>
+          {/* ───────────────────────────────────── */}
+
           <WalletButton wallet={wallet} />
         </div>
         <p className="hero-copy">
