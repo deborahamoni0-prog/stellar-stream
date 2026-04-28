@@ -6,6 +6,7 @@ export interface StreamEvent {
   id: number;
   streamId: string;
   eventType: StreamEventType;
+  ledgerSequence?: number;
   timestamp: number;
   actor?: string;
   amount?: number;
@@ -16,6 +17,7 @@ interface EventRow {
   id: number;
   stream_id: string;
   event_type: string;
+  ledger_sequence: number | null;
   timestamp: number;
   actor: string | null;
   amount: number | null;
@@ -27,6 +29,7 @@ function rowToEvent(row: EventRow): StreamEvent {
     id: row.id,
     streamId: row.stream_id,
     eventType: row.event_type as StreamEventType,
+    ledgerSequence: row.ledger_sequence ?? undefined,
     timestamp: row.timestamp,
     actor: row.actor ?? undefined,
     amount: row.amount ?? undefined,
@@ -41,15 +44,16 @@ export function recordEvent(
   actor?: string,
   amount?: number,
   metadata?: Record<string, any>,
+  ledgerSequence?: number,
 ): void {
   const db = getDb();
-  recordEventWithDb(db, streamId, eventType, timestamp, actor, amount, metadata);
+  recordEventWithDb(db, streamId, eventType, timestamp, actor, amount, metadata, ledgerSequence);
 }
 
 /**
  * Insert a stream event using a caller-supplied db handle (or transaction).
- * Use this when you need to compose the insert inside a better-sqlite3
- * transaction without calling getDb() from within the transaction callback.
+ * Uses INSERT OR IGNORE so duplicate (stream_id, event_type, ledger_sequence)
+ * rows are silently skipped — safe to call on indexer restart.
  */
 export function recordEventWithDb(
   db: any,
@@ -59,13 +63,15 @@ export function recordEventWithDb(
   actor?: string,
   amount?: number,
   metadata?: Record<string, any>,
+  ledgerSequence?: number,
 ): void {
   db.prepare(
-    `INSERT INTO stream_events (stream_id, event_type, timestamp, actor, amount, metadata)
-     VALUES (@streamId, @eventType, @timestamp, @actor, @amount, @metadata)`,
+    `INSERT OR IGNORE INTO stream_events (stream_id, event_type, ledger_sequence, timestamp, actor, amount, metadata)
+     VALUES (@streamId, @eventType, @ledgerSequence, @timestamp, @actor, @amount, @metadata)`,
   ).run({
     streamId,
     eventType,
+    ledgerSequence: ledgerSequence ?? null,
     timestamp,
     actor: actor ?? null,
     amount: amount ?? null,

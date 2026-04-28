@@ -67,6 +67,7 @@ function migrate(): void {
       id              INTEGER PRIMARY KEY AUTOINCREMENT,
       stream_id       TEXT NOT NULL,
       event_type      TEXT NOT NULL,
+      ledger_sequence INTEGER,
       timestamp       INTEGER NOT NULL,
       actor           TEXT,
       amount          REAL,
@@ -76,6 +77,10 @@ function migrate(): void {
 
     CREATE INDEX IF NOT EXISTS idx_stream_events_stream_id ON stream_events(stream_id);
     CREATE INDEX IF NOT EXISTS idx_stream_events_timestamp ON stream_events(timestamp);
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_stream_events_dedup
+      ON stream_events(stream_id, event_type, ledger_sequence)
+      WHERE ledger_sequence IS NOT NULL;
 
     CREATE TABLE IF NOT EXISTS webhook_deliveries (
       id              INTEGER PRIMARY KEY AUTOINCREMENT,
