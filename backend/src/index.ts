@@ -242,7 +242,7 @@ app.get("/api/events", (req: Request, res: Response) => {
     !hasPage && !hasLimit ? total : (query.limit ?? PAGINATION_DEFAULT_LIMIT);
 
   const offset = (page - 1) * limit;
-  const data = getGlobalEvents(limit === 0 ? 0 : limit, offset, eventType);
+  const data = getGlobalEvents(limit === 0 ? 0 : limit, offset, eventType, query.cursor);
 
   res.json({ data, total, page, limit });
 });

@@ -5,6 +5,8 @@ use soroban_sdk::{
     Map, String, Vec,
 };
 
+const NATIVE_SENTINEL: &str = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF";
+
 // ---------------------------------------------------------------------------
 // Stream struct
 // ---------------------------------------------------------------------------
@@ -37,6 +39,7 @@ enum DataKey {
     Stream(u64),
     SplitChildren(u64),
     ChildToParent(u64),
+    NativeToken,
 }
 
 // ---------------------------------------------------------------------------
@@ -104,11 +107,12 @@ impl StellarStreamContract {
 
     /// One-time setup: stores the admin address used for clawback authorization.
     /// Panics if called a second time to prevent privilege escalation.
-    pub fn initialize(env: Env, admin: Address) {
+    pub fn initialize(env: Env, admin: Address, native_token: Address) {
         if env.storage().instance().has(&DataKey::Admin) {
             panic!("already initialized");
         }
         env.storage().instance().set(&DataKey::Admin, &admin);
+        env.storage().instance().set(&DataKey::NativeToken, &native_token);
     }
 
     // -----------------------------------------------------------------------
@@ -134,7 +138,14 @@ impl StellarStreamContract {
             panic!("end_time must be greater than start_time");
         }
 
-        let token_client = TokenClient::new(&env, &token);
+        let is_native = token.to_string() == String::from_str(&env, NATIVE_SENTINEL);
+        let actual_token = if is_native {
+            env.storage().instance().get(&DataKey::NativeToken).unwrap_or_else(|| panic!("not initialized"))
+        } else {
+            token.clone()
+        };
+        let token_client = TokenClient::new(&env, &actual_token);
+
         let sender_balance = token_client.balance(&sender);
         if sender_balance < total_amount {
             panic!("insufficient sender balance");
@@ -336,8 +347,15 @@ impl StellarStreamContract {
             panic!("amount exceeds claimable");
         }
 
-        let token_client = TokenClient::new(&env, &stream.token);
+        let is_native = stream.token.to_string() == String::from_str(&env, NATIVE_SENTINEL);
+        let actual_token = if is_native {
+            env.storage().instance().get(&DataKey::NativeToken).unwrap_or_else(|| panic!("not initialized"))
+        } else {
+            stream.token.clone()
+        };
+        let token_client = TokenClient::new(&env, &actual_token);
         let contract_address = env.current_contract_address();
+        
         token_client.transfer(&contract_address, &recipient, &amount);
 
         stream.claimed_amount += amount;
@@ -381,8 +399,15 @@ impl StellarStreamContract {
         }
 
         if sender_refund > 0 {
-            let token_client = TokenClient::new(&env, &stream.token);
+            let is_native = stream.token.to_string() == String::from_str(&env, NATIVE_SENTINEL);
+            let actual_token = if is_native {
+                env.storage().instance().get(&DataKey::NativeToken).unwrap_or_else(|| panic!("not initialized"))
+            } else {
+                stream.token.clone()
+            };
+            let token_client = TokenClient::new(&env, &actual_token);
             let contract_address = env.current_contract_address();
+            
             token_client.transfer(&contract_address, &sender, &sender_refund);
         }
 
@@ -493,7 +518,13 @@ impl StellarStreamContract {
         };
 
         if actual_clawback > 0 {
-            let token_client = TokenClient::new(&env, &stream.token);
+            let is_native = stream.token.to_string() == String::from_str(&env, NATIVE_SENTINEL);
+            let actual_token = if is_native {
+                env.storage().instance().get(&DataKey::NativeToken).unwrap_or_else(|| panic!("not initialized"))
+            } else {
+                stream.token.clone()
+            };
+            let token_client = TokenClient::new(&env, &actual_token);
             let contract_address = env.current_contract_address();
             token_client.transfer(&contract_address, &admin, &actual_clawback);
 
