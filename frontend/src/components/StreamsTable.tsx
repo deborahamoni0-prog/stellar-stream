@@ -1,6 +1,6 @@
 
 import { Stream } from "../types/stream";
-import { getExportCsvUrl, ListStreamsFilters } from "../services/api";
+import { getExportCsvUrl, ListStreamsFilters, cancelStream } from "../services/api";
 import { CopyableAddress } from "./CopyableAddress";
 import { StreamTimeline } from "./StreamTimeline";
 import { getHealthBadges } from "../utils/streamHealthBadges";
@@ -36,6 +36,105 @@ function formatTimestamp(unixSeconds: number): string {
 
   };
 
+  // Helper: determine if a stream is eligible for selection (active or scheduled)
+  const isStreamSelectable = (stream: Stream): boolean => {
+    return stream.progress.status === "active" || stream.progress.status === "scheduled";
+  };
+
+  // Get all selectable streams on current page
+  const selectableStreams = streams.filter(isStreamSelectable);
+  const selectableIds = new Set(selectableStreams.map((s) => s.id));
+
+  // Determine if all selectable streams are selected
+  const allSelectableSelected =
+    selectableStreams.length > 0 &&
+    selectableStreams.every((stream) => selectedStreamIds.has(stream.id));
+
+  // Handle individual checkbox toggle
+  const handleCheckboxToggle = (streamId: string) => {
+    setSelectedStreamIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(streamId)) {
+        next.delete(streamId);
+      } else {
+        next.add(streamId);
+      }
+      return next;
+    });
+  };
+
+  // Handle "Select All" toggle
+  const handleSelectAllToggle = () => {
+    if (allSelectableSelected) {
+      // Deselect all on current page
+      setSelectedStreamIds((prev) => {
+        const next = new Set(prev);
+        selectableIds.forEach((id) => next.delete(id));
+        return next;
+      });
+    } else {
+      // Select all selectable on current page
+      setSelectedStreamIds((prev) => {
+        const next = new Set(prev);
+        selectableIds.forEach((id) => next.add(id));
+        return next;
+      });
+    }
+  };
+
+  // Sequential bulk cancellation
+  const handleBulkCancel = async () => {
+    const idsToCancel = Array.from(selectedStreamIds);
+    if (idsToCancel.length === 0) return;
+
+    setIsBulkCanceling(true);
+    setBulkCancelProgress({ current: 0, total: idsToCancel.length });
+
+    let successCount = 0;
+    let failureCount = 0;
+
+    // Sequential execution: call cancelStream one by one
+    for (let i = 0; i < idsToCancel.length; i++) {
+      const streamId = idsToCancel[i];
+      setBulkCancelProgress({ current: i + 1, total: idsToCancel.length });
+
+      try {
+        await cancelStream(streamId);
+        successCount++;
+      } catch (error) {
+        console.error(`Failed to cancel stream ${streamId}:`, error);
+        failureCount++;
+      }
+    }
+
+    // Cleanup: clear selection and refresh table
+    setSelectedStreamIds(new Set());
+    setIsBulkCanceling(false);
+    setBulkCancelProgress({ current: 0, total: 0 });
+
+    // Trigger refresh if callback provided
+    if (onRefresh) {
+      onRefresh();
+    }
+
+    // Optional: Show success toast (simple console log for now)
+    console.log(
+      `Bulk cancellation complete: ${successCount} succeeded, ${failureCount} failed`
+    );
+  };
+
+  // Clear selections when streams change (e.g., after filter change)
+  useEffect(() => {
+    setSelectedStreamIds((prev) => {
+      const validIds = new Set(streams.map((s) => s.id));
+      const next = new Set<string>();
+      prev.forEach((id) => {
+        if (validIds.has(id)) next.add(id);
+      });
+      return next;
+    });
+  }, [streams]);
+
   return (
     <div className="card">
       <FilterBar filters={filters} onChange={onFiltersChange} />
@@ -53,21 +152,32 @@ function formatTimestamp(unixSeconds: number): string {
         </a>
       </div>
 
-      {streams.length === 0 ? (
-        <p className="muted">No streams match your filters.</p>
-      ) : (
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>ID</th>
-                <th>Route</th>
-                <th>Asset</th>
-                <th>Progress</th>
-                <th>Status</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
+        {streams.length === 0 ? (
+          <p className="muted">No streams match your filters.</p>
+        ) : (
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th style={{ width: "40px" }}>
+                    {selectableStreams.length > 0 && (
+                      <input
+                        type="checkbox"
+                        checked={allSelectableSelected}
+                        onChange={handleSelectAllToggle}
+                        aria-label="Select all streams"
+                        style={{ cursor: "pointer" }}
+                      />
+                    )}
+                  </th>
+                  <th>ID</th>
+                  <th>Route</th>
+                  <th>Asset</th>
+                  <th>Progress</th>
+                  <th>Status</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
             <tbody>
               {streams.map((stream) => {
                 const isScheduled = stream.progress.status === "scheduled";
@@ -96,6 +206,64 @@ function formatTimestamp(unixSeconds: number): string {
           </table>
         </div>
       )}
+      </div>
+
+      {/* Floating Action Bar */}
+      {selectedStreamIds.size > 0 && (
+        <BulkActionBar
+          selectedCount={selectedStreamIds.size}
+          onCancel={handleBulkCancel}
+          isCanceling={isBulkCanceling}
+          progress={bulkCancelProgress}
+        />
+      )}
+    </>
+  );
+}
+
+/**
+ * BulkActionBar Component
+ * 
+ * Floating action bar that appears at the bottom of the viewport when streams are selected.
+ * Provides visual feedback during bulk cancellation operations.
+ * 
+ * Features:
+ * - Fixed positioning with high z-index (1000) to stay above other content
+ * - Slide-up animation on mount
+ * - Shows selected count and cancel button
+ * - Displays progress during cancellation (e.g., "Canceling 3/10...")
+ * - Button is disabled during operation to prevent duplicate submissions
+ * - Responsive design: centered on desktop, full-width on mobile
+ */
+interface BulkActionBarProps {
+  selectedCount: number;
+  onCancel: () => void;
+  isCanceling: boolean;
+  progress: { current: number; total: number };
+}
+
+function BulkActionBar({
+  selectedCount,
+  onCancel,
+  isCanceling,
+  progress,
+}: BulkActionBarProps) {
+  return (
+    <div className="bulk-action-bar">
+      <div className="bulk-action-bar__content">
+        <span className="bulk-action-bar__count">
+          {selectedCount} stream{selectedCount !== 1 ? "s" : ""} selected
+        </span>
+        <button
+          className="bulk-action-bar__button"
+          onClick={onCancel}
+          disabled={isCanceling}
+        >
+          {isCanceling
+            ? `Canceling ${progress.current}/${progress.total}...`
+            : `Cancel ${selectedCount} Stream${selectedCount !== 1 ? "s" : ""}`}
+        </button>
+      </div>
     </div>
   );
 }
