@@ -11,7 +11,7 @@ import { z } from "zod";
 const stellarAccountIdSchema = z
   .string()
   .length(56, "must be exactly 56 characters")
-  .regex(/^[GC]/, "must start with G (account) or C (contract)");
+  .regex(/^C/, "must start with C (contract)");
 
 // Stellar secret key format: 56 chars, starts with S
 const stellarSecretKeySchema = z
@@ -77,6 +77,7 @@ export function validateEnv(): ValidatedConfig {
       console.error(`   ${envVar}: ${issue.message}`);
     });
     process.exit(1);
+    throw new Error("Environment validation failed"); // Ensure execution stops in tests
   }
 
   const env = parsed.data;
@@ -103,6 +104,7 @@ export function validateEnv(): ValidatedConfig {
       console.error("   To run locally without on-chain operations:");
       console.error("   - Set SOROBAN_DISABLED=true\n");
       process.exit(1);
+      throw new Error("Environment validation failed");
     }
 
     // Validate CONTRACT_ID format
@@ -113,6 +115,7 @@ export function validateEnv(): ValidatedConfig {
         console.error(`   ${issue.message}`);
       });
       process.exit(1);
+      throw new Error("Environment validation failed");
     }
 
     // Validate SERVER_PRIVATE_KEY format
@@ -123,16 +126,18 @@ export function validateEnv(): ValidatedConfig {
         console.error(`   ${issue.message}`);
       });
       process.exit(1);
+      throw new Error("Environment validation failed");
     }
 
     // Validate RPC_URL format
     const rpcValidation = urlSchema.safeParse(env.RPC_URL);
     if (!rpcValidation.success) {
-      console.error("❌ RPC_URL validation failed:");
+      console.error(`❌ RPC_URL validation failed: ${env.RPC_URL}`);
       rpcValidation.error.issues.forEach((issue: z.ZodIssue) => {
         console.error(`   ${issue.message}`);
       });
       process.exit(1);
+      throw new Error("Environment validation failed");
     }
 
     contractId = env.CONTRACT_ID;
@@ -147,11 +152,12 @@ export function validateEnv(): ValidatedConfig {
   if (env.WEBHOOK_DESTINATION_URL) {
     const webhookValidation = urlSchema.safeParse(env.WEBHOOK_DESTINATION_URL);
     if (!webhookValidation.success) {
-      console.error("❌ WEBHOOK_DESTINATION_URL validation failed:");
+      console.error(`❌ WEBHOOK_DESTINATION_URL validation failed: ${env.WEBHOOK_DESTINATION_URL}`);
       webhookValidation.error.issues.forEach((issue: z.ZodIssue) => {
         console.error(`   ${issue.message}`);
       });
       process.exit(1);
+      throw new Error("Environment validation failed");
     }
   }
 
@@ -170,6 +176,7 @@ export function validateEnv(): ValidatedConfig {
   if (allowedAssets.length === 0) {
     console.error("❌ ALLOWED_ASSETS must contain at least one asset code");
     process.exit(1);
+    throw new Error("Environment validation failed");
   }
 
   console.log(`✅ Configuration validated (port: ${env.PORT}, assets: ${allowedAssets.join(", ")})`);
