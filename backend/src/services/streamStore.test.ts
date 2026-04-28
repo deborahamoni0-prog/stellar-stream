@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 type StoredStream = {
   id: string;
@@ -290,9 +290,14 @@ describe("reconcileMissingStreams", () => {
 });
 
 describe("archiveOldStreams", () => {
+  const frozenTime = Math.floor(Date.now() / 1000); // Freeze time at test start
+  
   beforeEach(() => {
     vi.resetModules();
     vi.clearAllMocks();
+
+    // Freeze time across all tests to avoid boundary flakiness
+    vi.spyOn(Date, 'now').mockReturnValue(frozenTime * 1000);
 
     mockState.nextId = 1;
     mockState.existingStreamIds = new Set<string>();
@@ -308,7 +313,17 @@ describe("archiveOldStreams", () => {
     delete process.env.SERVER_PRIVATE_KEY;
   });
 
-  function createArchiveDbMock() {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  /**
+ * Creates a mock database instance for testing archiveOldStreams functionality.
+ * Provides in-memory storage for streams and archived streams with SQL-like interface.
+ * 
+ * @returns Mock database object with prepare, transaction, and helper methods
+ */
+function createArchiveDbMock() {
     const streams: Array<{
       id: string;
       sender: string;
@@ -435,13 +450,13 @@ describe("archiveOldStreams", () => {
     };
   }
 
-  it("archives completed streams older than 30 days", async () => {
-    const now = Math.floor(Date.now() / 1000);
+  /**
+ * Test that completed streams older than 30 days are correctly archived.
+ * Verifies archival count, archived stream data, and timestamp setting.
+ */
+it("archives completed streams older than 30 days", async () => {
+    const now = frozenTime;
     const thirtyOneDaysAgo = now - 31 * 24 * 60 * 60;
-    
-    // Mock Date.now to return a consistent time
-    const mockDateNow = now * 1000;
-    vi.spyOn(Date, 'now').mockReturnValue(mockDateNow);
     
     const dbMock = createArchiveDbMock();
     dbMock._addStream({
@@ -478,11 +493,14 @@ describe("archiveOldStreams", () => {
     expect(typeof streams[0].archived_at).toBe('number');
     expect(streams[0].archived_at).toBeGreaterThan(0);
     
-    vi.restoreAllMocks();
-  });
+    });
 
-  it("does not archive completed streams younger than 30 days", async () => {
-    const now = Math.floor(Date.now() / 1000);
+  /**
+ * Test that completed streams younger than 30 days are not archived.
+ * Verifies that streams completed 29 days ago remain unarchived.
+ */
+it("does not archive completed streams younger than 30 days", async () => {
+    const now = frozenTime;
     const twentyNineDaysAgo = now - 29 * 24 * 60 * 60;
     
     const dbMock = createArchiveDbMock();
@@ -512,8 +530,12 @@ describe("archiveOldStreams", () => {
     expect(streams[0].archived_at).toBeNull();
   });
 
-  it("does not archive active streams older than 30 days", async () => {
-    const now = Math.floor(Date.now() / 1000);
+  /**
+ * Test that active streams (without completed_at) are not archived.
+ * Verifies that only completed streams are eligible for archival regardless of age.
+ */
+it("does not archive active streams older than 30 days", async () => {
+    const now = frozenTime;
     const thirtyOneDaysAgo = now - 31 * 24 * 60 * 60;
     
     const dbMock = createArchiveDbMock();
@@ -543,8 +565,12 @@ describe("archiveOldStreams", () => {
     expect(streams[0].archived_at).toBeNull();
   });
 
-  it("excludes archived streams from default listStreams results", async () => {
-    const now = Math.floor(Date.now() / 1000);
+  /**
+ * Test that archived streams are excluded from default listStreams results.
+ * Verifies listStreams() excludes archived streams by default but includes them when includeArchived=true.
+ */
+it("excludes archived streams from default listStreams results", async () => {
+    const now = frozenTime;
     
     const dbMock = createArchiveDbMock();
     dbMock._addStream({
@@ -585,8 +611,12 @@ describe("archiveOldStreams", () => {
     expect(allStreams.map(s => s.id)).toEqual(["1", "2"]);
   });
 
-  it("tests age threshold boundary at exactly 30 days", async () => {
-    const now = Math.floor(Date.now() / 1000);
+  /**
+ * Test age threshold boundary at exactly 30 days.
+ * Verifies streams completed exactly 30 days ago are not archived, but 30 days + 1 second are.
+ */
+it("tests age threshold boundary at exactly 30 days", async () => {
+    const now = frozenTime;
     const exactlyThirtyDaysAgo = now - 30 * 24 * 60 * 60;
     
     const dbMock = createArchiveDbMock();
@@ -632,8 +662,12 @@ describe("archiveOldStreams", () => {
     expect(streams.find(s => s.id === "2")?.archived_at).toBeGreaterThan(0);
   });
 
-  it("handles multiple streams in a single transaction", async () => {
-    const now = Math.floor(Date.now() / 1000);
+  /**
+ * Test handling of multiple streams in a single transaction.
+ * Verifies that multiple eligible streams are correctly archived together.
+ */
+it("handles multiple streams in a single transaction", async () => {
+    const now = frozenTime;
     const thirtyOneDaysAgo = now - 31 * 24 * 60 * 60;
     
     const dbMock = createArchiveDbMock();
