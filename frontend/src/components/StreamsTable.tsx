@@ -1,6 +1,6 @@
-import { useMemo, useState, useRef, type RefObject } from "react";
+
 import { Stream } from "../types/stream";
-import { getExportCsvUrl, ListStreamsFilters } from "../services/api";
+import { getExportCsvUrl, ListStreamsFilters, cancelStream } from "../services/api";
 import { CopyableAddress } from "./CopyableAddress";
 import { StreamTimeline } from "./StreamTimeline";
 import { getHealthBadges } from "../utils/streamHealthBadges";
@@ -11,6 +11,8 @@ interface StreamsTableProps {
   filters: ListStreamsFilters;
   onFiltersChange: (f: ListStreamsFilters) => void;
   onCancel: (streamId: string) => Promise<void>;
+  onPause: (streamId: string) => Promise<void>;
+  onResume: (streamId: string) => Promise<void>;
   onOpenStream?: (streamId: string) => void;
   /**
    * Called when the user clicks "Edit" for a scheduled stream.
@@ -25,6 +27,7 @@ function statusClass(status: Stream["progress"]["status"]): string {
     case "scheduled": return "badge badge-scheduled";
     case "completed": return "badge badge-completed";
     case "canceled":  return "badge badge-canceled";
+    case "paused":    return "badge badge-paused";
     default:          return "badge";
   }
 }
@@ -33,99 +36,99 @@ function formatTimestamp(unixSeconds: number): string {
   return new Date(unixSeconds * 1000).toLocaleString();
 }
 
-type SortColumn = 'status' | 'amount' | 'vested' | 'startDate' | null;
-type SortDirection = 'asc' | 'desc' | null;
 
-export function StreamsTable({
-  streams,
-  filters,
-  onFiltersChange,
-  onCancel,
-  onEditStartTime,
-  onOpenStream,
-}: StreamsTableProps) {
-  const [expandedStreamId, setExpandedStreamId] = useState<string | null>(null);
-  const [sortColumn, setSortColumn] = useState<SortColumn>(null);
-  const [sortDirection, setSortDirection] = useState<SortDirection>(null);
-  
-  const exportUrl = useMemo(() => getExportCsvUrl(filters as Record<string, string>), [filters]);
 
-  const toggleTimeline = (streamId: string) => {
-    setExpandedStreamId((prev) => (prev === streamId ? null : streamId));
+
   };
 
-  const handleHeaderClick = (column: SortColumn) => {
-    if (sortColumn === column) {
-      // Already sorting by this column
-      if (sortDirection === 'asc') {
-        // Switch to descending
-        setSortDirection('desc');
-      } else if (sortDirection === 'desc') {
-        // Reset to default
-        setSortColumn(null);
-        setSortDirection(null);
-      }
-    } else {
-      // New column, start with ascending
-      setSortColumn(column);
-      setSortDirection('asc');
-    }
+  // Helper: determine if a stream is eligible for selection (active or scheduled)
+  const isStreamSelectable = (stream: Stream): boolean => {
+    return stream.progress.status === "active" || stream.progress.status === "scheduled";
   };
 
-  // Sort streams based on current sort state
-  const sortedStreams = useMemo(() => {
-    if (!sortColumn || !sortDirection) {
-      return streams;
-    }
+  // Get all selectable streams on current page
+  const selectableStreams = streams.filter(isStreamSelectable);
+  const selectableIds = new Set(selectableStreams.map((s) => s.id));
 
-    const sorted = [...streams];
-    
-    sorted.sort((a, b) => {
-      let valueA: number | string | Date;
-      let valueB: number | string | Date;
+  // Determine if all selectable streams are selected
+  const allSelectableSelected =
+    selectableStreams.length > 0 &&
+    selectableStreams.every((stream) => selectedStreamIds.has(stream.id));
 
-      switch (sortColumn) {
-        case 'status': {
-          const statusOrder: Record<string, number> = {
-            active: 0,
-            scheduled: 1,
-            completed: 2,
-            canceled: 3,
-          };
-          valueA = statusOrder[a.progress.status] ?? 999;
-          valueB = statusOrder[b.progress.status] ?? 999;
-          break;
-        }
-        case 'amount': {
-          valueA = a.totalAmount;
-          valueB = b.totalAmount;
-          break;
-        }
-        case 'vested': {
-          valueA = a.progress.vestedAmount;
-          valueB = b.progress.vestedAmount;
-          break;
-        }
-        case 'startDate': {
-          valueA = a.startAt;
-          valueB = b.startAt;
-          break;
-        }
-        default:
-          return 0;
+  // Handle individual checkbox toggle
+  const handleCheckboxToggle = (streamId: string) => {
+    setSelectedStreamIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(streamId)) {
+        next.delete(streamId);
+      } else {
+        next.add(streamId);
       }
-
-      if (valueA < valueB) {
-        return sortDirection === 'asc' ? -1 : 1;
-      }
-      if (valueA > valueB) {
-        return sortDirection === 'asc' ? 1 : -1;
-      }
-      return 0;
+      return next;
     });
+  };
 
-    return sorted;
-  }, [streams, sortColumn, sortDirection]);
+  // Handle "Select All" toggle
+  const handleSelectAllToggle = () => {
+    if (allSelectableSelected) {
+      // Deselect all on current page
+      setSelectedStreamIds((prev) => {
+        const next = new Set(prev);
+        selectableIds.forEach((id) => next.delete(id));
+        return next;
+      });
+    } else {
+      // Select all selectable on current page
+      setSelectedStreamIds((prev) => {
+        const next = new Set(prev);
+        selectableIds.forEach((id) => next.add(id));
+        return next;
+      });
+    }
+  };
+
+  // Sequential bulk cancellation
+  const handleBulkCancel = async () => {
+    const idsToCancel = Array.from(selectedStreamIds);
+    if (idsToCancel.length === 0) return;
+
+    setIsBulkCanceling(true);
+    setBulkCancelProgress({ current: 0, total: idsToCancel.length });
+
+    let successCount = 0;
+    let failureCount = 0;
+
+    // Sequential execution: call cancelStream one by one
+    for (let i = 0; i < idsToCancel.length; i++) {
+      const streamId = idsToCancel[i];
+      setBulkCancelProgress({ current: i + 1, total: idsToCancel.length });
+
+      try {
+        await cancelStream(streamId);
+        successCount++;
+      } catch (error) {
+        console.error(`Failed to cancel stream ${streamId}:`, error);
+        failureCount++;
+      }
+    }
+
+    // Cleanup: clear selection and refresh table
+    setSelectedStreamIds(new Set());
+    setIsBulkCanceling(false);
+    setBulkCancelProgress({ current: 0, total: 0 });
+
+    // Trigger refresh if callback provided
+    if (onRefresh) {
+      onRefresh();
+    }
+
+    // Optional: Show success toast (simple console log for now)
+    console.log(
+      `Bulk cancellation complete: ${successCount} succeeded, ${failureCount} failed`
+    );
+  };
+
+
 
   return (
     <div className="card">
@@ -144,78 +147,7 @@ export function StreamsTable({
         </a>
       </div>
 
-      {streams.length === 0 ? (
-        <p className="muted">No streams match your filters.</p>
-      ) : (
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>ID</th>
-                <th>Route</th>
-                <th>
-                  <button
-                    type="button"
-                    className="sort-header"
-                    onClick={() => handleHeaderClick('amount')}
-                    title="Click to sort by total amount"
-                  >
-                    Asset
-                    {sortColumn === 'amount' && sortDirection && (
-                      <span className="sort-icon">
-                        {sortDirection === 'asc' ? ' ▲' : ' ▼'}
-                      </span>
-                    )}
-                  </button>
-                  <div className="header-subtext">
-                    <button
-                      type="button"
-                      className="sort-header sort-header-sub"
-                      onClick={() => handleHeaderClick('startDate')}
-                      title="Click to sort by start date"
-                    >
-                      Start Date
-                      {sortColumn === 'startDate' && sortDirection && (
-                        <span className="sort-icon">
-                          {sortDirection === 'asc' ? ' ▲' : ' ▼'}
-                        </span>
-                      )}
-                    </button>
-                  </div>
-                </th>
-                <th>
-                  <button
-                    type="button"
-                    className="sort-header"
-                    onClick={() => handleHeaderClick('vested')}
-                    title="Click to sort by vested amount"
-                  >
-                    Progress
-                    {sortColumn === 'vested' && sortDirection && (
-                      <span className="sort-icon">
-                        {sortDirection === 'asc' ? ' ▲' : ' ▼'}
-                      </span>
-                    )}
-                  </button>
-                </th>
-                <th>
-                  <button
-                    type="button"
-                    className="sort-header"
-                    onClick={() => handleHeaderClick('status')}
-                    title="Click to sort by status"
-                  >
-                    Status
-                    {sortColumn === 'status' && sortDirection && (
-                      <span className="sort-icon">
-                        {sortDirection === 'asc' ? ' ▲' : ' ▼'}
-                      </span>
-                    )}
-                  </button>
-                </th>
-                <th>Actions</th>
-              </tr>
-            </thead>
+
             <tbody>
               {sortedStreams.map((stream) => {
                 const isScheduled = stream.progress.status === "scheduled";
@@ -235,6 +167,8 @@ export function StreamsTable({
                     healthBadges={healthBadges}
                     onToggleTimeline={toggleTimeline}
                     onCancel={onCancel}
+                    onPause={onPause}
+                    onResume={onResume}
                     onEditStartTime={onEditStartTime}
                     onOpenStream={onOpenStream}
                   />
@@ -244,10 +178,67 @@ export function StreamsTable({
           </table>
         </div>
       )}
-    </div>
+      </div>
+
+      {/* Floating Action Bar */}
+      {selectedStreamIds.size > 0 && (
+        <BulkActionBar
+          selectedCount={selectedStreamIds.size}
+          onCancel={handleBulkCancel}
+          isCanceling={isBulkCanceling}
+          progress={bulkCancelProgress}
+        />
+      )}
+    </>
   );
 }
 
+/**
+ * BulkActionBar Component
+ * 
+ * Floating action bar that appears at the bottom of the viewport when streams are selected.
+ * Provides visual feedback during bulk cancellation operations.
+ * 
+ * Features:
+ * - Fixed positioning with high z-index (1000) to stay above other content
+ * - Slide-up animation on mount
+ * - Shows selected count and cancel button
+ * - Displays progress during cancellation (e.g., "Canceling 3/10...")
+ * - Button is disabled during operation to prevent duplicate submissions
+ * - Responsive design: centered on desktop, full-width on mobile
+ */
+interface BulkActionBarProps {
+  selectedCount: number;
+  onCancel: () => void;
+  isCanceling: boolean;
+  progress: { current: number; total: number };
+}
+
+function BulkActionBar({
+  selectedCount,
+  onCancel,
+  isCanceling,
+  progress,
+}: BulkActionBarProps) {
+  return (
+    <div className="bulk-action-bar">
+      <div className="bulk-action-bar__content">
+        <span className="bulk-action-bar__count">
+          {selectedCount} stream{selectedCount !== 1 ? "s" : ""} selected
+        </span>
+        <button
+          className="bulk-action-bar__button"
+          onClick={onCancel}
+          disabled={isCanceling}
+        >
+          {isCanceling
+            ? `Canceling ${progress.current}/${progress.total}...`
+            : `Cancel ${selectedCount} Stream${selectedCount !== 1 ? "s" : ""}`}
+        </button>
+      </div>
+    </div>
+  );
+}
 
 // ── StreamRow ─────────────────────────────────────────────────────────────
 // Extracted so each row can hold its own triggerRef without polluting the
@@ -261,6 +252,8 @@ interface StreamRowProps {
   healthBadges: ReturnType<typeof getHealthBadges>;
   onToggleTimeline: (id: string) => void;
   onCancel: (id: string) => Promise<void>;
+  onPause: (id: string) => Promise<void>;
+  onResume: (id: string) => Promise<void>;
   onEditStartTime: StreamsTableProps["onEditStartTime"];
   onOpenStream?: (streamId: string) => void;
 }
@@ -273,6 +266,8 @@ function StreamRow({
   healthBadges,
   onToggleTimeline,
   onCancel,
+  onPause,
+  onResume,
   onEditStartTime,
   onOpenStream,
 }: StreamRowProps) {
@@ -281,6 +276,8 @@ function StreamRow({
    * Passed to the modal so focus returns here when the modal closes.
    */
   const editBtnRef = useRef<HTMLButtonElement>(null);
+  const isPaused = stream.progress.status === "paused";
+  const isActive = stream.progress.status === "active";
 
   return (
     <>
@@ -359,6 +356,26 @@ function StreamRow({
                 ✏️ Edit
               </button>
             )}
+            {isActive && (
+              <button
+                className="btn-ghost"
+                type="button"
+                aria-label={`Pause stream ${stream.id}`}
+                onClick={() => onPause(stream.id)}
+              >
+                ⏸ Pause
+              </button>
+            )}
+            {isPaused && (
+              <button
+                className="btn-ghost"
+                type="button"
+                aria-label={`Resume stream ${stream.id}`}
+                onClick={() => onResume(stream.id)}
+              >
+                ▶ Resume
+              </button>
+            )}
             <button
               className="btn-ghost"
               type="button"
@@ -388,4 +405,3 @@ function StreamRow({
     </>
   );
 }
-

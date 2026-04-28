@@ -918,6 +918,53 @@ export const swaggerDocument = {
         },
       },
     },
+    "/api/streams/{id}/history/summary": {
+      get: {
+        summary: "Get stream event count summary",
+        description: "Returns aggregated event counts per type for a stream. Useful for dashboard badges. Uses a single GROUP BY query; missing event types return 0.",
+        parameters: [
+          {
+            name: "id",
+            in: "path",
+            required: true,
+            description: "The unique ID of the stream.",
+            schema: { type: "string" },
+          },
+        ],
+        responses: {
+          "200": {
+            description: "Event count summary.",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    data: {
+                      type: "object",
+                      required: ["created", "claimed", "canceled", "start_time_updated"],
+                      properties: {
+                        created: { type: "integer", example: 1 },
+                        claimed: { type: "integer", example: 3 },
+                        canceled: { type: "integer", example: 0 },
+                        start_time_updated: { type: "integer", example: 1 },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+          "404": {
+            description: "Stream not found.",
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/Error" },
+              },
+            },
+          },
+        },
+      },
+    },
     "/api/streams/{id}/snapshot": {
       get: {
         summary: "Get Stream Snapshot",

@@ -84,7 +84,7 @@ export const updateStreamStartAtSchema = z.object({
   startAt: unixTimestampSchema,
 });
 
-const VALID_EVENT_TYPES = ["created", "claimed", "canceled", "start_time_updated"] as const;
+const VALID_EVENT_TYPES = ["created", "claimed", "canceled", "start_time_updated", "paused", "resumed"] as const;
 
 export const webhookRegistrationSchema = z.object({
   url: z
@@ -126,6 +126,10 @@ export const listEventsQuerySchema = z.object({
     .int("limit must be an integer")
     .min(1, "limit must be greater than or equal to 1")
     .max(100, "limit must be less than or equal to 100")
+    .optional(),
+  cursor: z
+    .coerce.number()
+    .int("cursor must be an integer")
     .optional(),
 });
 

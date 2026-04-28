@@ -13,6 +13,7 @@ let contractId: string | null = null;
 let networkPassphrase: string = Networks.TESTNET;
 let lastProcessedLedger = 0;
 let indexerInterval: NodeJS.Timeout | null = null;
+let indexerStartLedger: number | null = null;
 
 export enum CircuitState {
   CLOSED = "CLOSED",
@@ -87,6 +88,20 @@ export function initIndexer(
   if (networkPass) {
     networkPassphrase = networkPass;
   }
+
+  // Read INDEXER_START_LEDGER environment variable
+  const startLedgerEnv = process.env.INDEXER_START_LEDGER;
+  if (startLedgerEnv !== undefined) {
+    const startLedger = parseInt(startLedgerEnv, 10);
+    if (!isNaN(startLedger)) {
+      indexerStartLedger = startLedger;
+      if (startLedger !== 0) {
+        console.warn(`INDEXER_START_LEDGER override active: starting from ledger ${startLedger}`);
+      }
+    } else {
+      console.error('Invalid INDEXER_START_LEDGER value, must be a number');
+    }
+  }
 }
 
 export function startIndexer(intervalMs = 10000): void {
@@ -131,16 +146,8 @@ async function indexEvents(): Promise<void> {
     const currentLedger = latestLedger.sequence;
 
     if (lastProcessedLedger === 0) {
-      // First run - attempt to load last processed ledger from database
-      const row = db
-        .prepare("SELECT last_ledger FROM indexer_cursor WHERE id = ?")
-        .get(contractId) as { last_ledger: number } | undefined;
 
-      if (row) {
-        lastProcessedLedger = row.last_ledger;
-      } else {
-        // Fallback: start from recent history (last 100 ledgers)
-        lastProcessedLedger = Math.max(1, currentLedger - 100);
+        }
       }
     }
 
@@ -168,9 +175,12 @@ async function indexEvents(): Promise<void> {
       }
 
       lastProcessedLedger = currentLedger;
-      db.prepare(
-        "INSERT INTO indexer_cursor (id, last_ledger) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET last_ledger = excluded.last_ledger",
-      ).run(contractId, lastProcessedLedger);
+      db.prepare(`
+  INSERT INTO indexer_cursor (id, last_ledger_sequence)
+  VALUES (1, ?)
+  ON CONFLICT(id)
+  DO UPDATE SET last_ledger_sequence = excluded.last_ledger_sequence
+`).run(lastProcessedLedger);
     })();
 
     circuitBreaker.onSuccess();
