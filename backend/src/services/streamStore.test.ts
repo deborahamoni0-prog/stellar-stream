@@ -321,10 +321,11 @@ describe("archiveOldStreams", () => {
           return {
             all: (params: any) => {
               const threshold = params; // params is the threshold directly, not an array
-              return streams.filter(stream => 
-                stream.completed_at && 
-                stream.completed_at < threshold && 
-                !stream.archived_at
+              return streams.filter((stream) =>
+                stream.completed_at != null &&
+                stream.completed_at < threshold &&
+                stream.archived_at == null
+              );
               );
             },
           };
