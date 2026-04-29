@@ -11,7 +11,8 @@ while IFS='|' read -r prefix func cpu_current mem_current; do
     baseline_line=$(grep "| $func |" BENCHMARKS.md || true)
     
     if [ -z "$baseline_line" ]; then
-        echo "⚠️  No baseline found for $func. Skipping."
+        echo "❌ No baseline found for $func."
+        FAILED=1
         continue
     fi
 
