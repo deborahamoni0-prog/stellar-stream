@@ -4,6 +4,12 @@ Thank you for your interest in contributing to StellarStream! This guide will he
 
 Check out the [FAQ.md](FAQ.md) for common contributor questions and troubleshooting tips.
 
+## Architecture Decision Records
+
+Important architectural decisions are documented in [Architecture Decision Records (ADRs)](docs/adr/). These documents explain the rationale behind significant technical choices, including:
+
+- [ADR 0002: Soroban Contract Integration Approach](docs/adr/0002-soroban-integration.md) - Why we use server-side signing vs. client-side signing for Soroban transactions
+
 ## Development Setup
 
 1. Clone the repository
@@ -28,3 +34,4 @@ If you change event structures and need to update the snapshots, run:
 
 ```bash
 cargo insta review
+```
