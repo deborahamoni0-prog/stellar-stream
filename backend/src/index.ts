@@ -95,6 +95,14 @@ const listStreamsQuerySchema = z.object({
   sender: z.string().trim().optional(),
   asset: z.string().trim().optional(),
   q: z.string().trim().optional(),
+  minAmount: z
+    .coerce.number()
+    .nonnegative("minAmount must be a non-negative number")
+    .optional(),
+  maxAmount: z
+    .coerce.number()
+    .nonnegative("maxAmount must be a non-negative number")
+    .optional(),
   include_archived: z
     .enum(["true", "false"])
     .optional()
@@ -237,6 +245,12 @@ app.get("/api/streams", (req: Request, res: Response) => {
         stream.assetCode.toLowerCase().includes(searchTerm)
       );
     });
+  }
+  if (query.minAmount !== undefined) {
+    data = data.filter((stream) => stream.totalAmount >= query.minAmount!);
+  }
+  if (query.maxAmount !== undefined) {
+    data = data.filter((stream) => stream.totalAmount <= query.maxAmount!);
   }
 
   const total = data.length;
