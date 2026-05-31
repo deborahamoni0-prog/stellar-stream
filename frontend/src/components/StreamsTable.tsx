@@ -73,6 +73,7 @@ interface StreamRowProps {
   onResume?: (id: string) => Promise<void>;
   onEditStartTime: StreamsTableProps["onEditStartTime"];
   onOpenStream?: (streamId: string) => void;
+  onToggleTimeline: (streamId: string) => void;
 }
 
 function StreamRow({
@@ -86,6 +87,7 @@ function StreamRow({
   onResume,
   onEditStartTime,
   onOpenStream,
+  onToggleTimeline,
 }: StreamRowProps) {
   const editBtnRef = useRef<HTMLButtonElement>(null);
   const isPaused = stream.progress.status === "paused";
@@ -101,7 +103,7 @@ function StreamRow({
             aria-expanded={isExpanded}
             aria-controls={`timeline-${stream.id}`}
             onClick={() => {
-              onOpenStream?.(stream.id);
+              onToggleTimeline(stream.id);
             }}
             title={isExpanded ? "Hide timeline" : "Show timeline"}
           >
@@ -293,6 +295,7 @@ export function StreamsTable({
                     onResume={onResume}
                     onEditStartTime={onEditStartTime}
                     onOpenStream={onOpenStream}
+                    onToggleTimeline={toggleTimeline}
                   />
                 );
               })}
