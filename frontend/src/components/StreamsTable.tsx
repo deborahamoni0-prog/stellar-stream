@@ -35,7 +35,9 @@ interface StreamsTableProps {
   // Optional props expected by App.tsx
   totalStreamCount?: number;
   onCreateStream?: () => void;
-
+  onLoadMore?: () => void;
+  hasMore?: boolean;
+  loadingMore?: boolean;
 }
 
 const SKELETON_ROW_COUNT = 6;
@@ -96,10 +98,29 @@ export function StreamsTable({
   onResume,
   onEditStartTime,
   onOpenStream,
+  onLoadMore,
+  hasMore = true,
+  loadingMore = false,
 }: StreamsTableProps) {
   const { visibility, toggleColumn, isVisible } = useStreamTableColumns();
   const [columnsOpen, setColumnsOpen] = useState(false);
   const columnsRef = useRef<HTMLDivElement>(null);
+  const sentinelRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const sentinel = sentinelRef.current;
+    if (!sentinel || !onLoadMore) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting && hasMore && !loadingMore) {
+          onLoadMore();
+        }
+      },
+      { rootMargin: "200px" },
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [onLoadMore, hasMore, loadingMore]);
 
   const [selectedStreamIds, setSelectedStreamIds] = useState<Set<string>>(new Set());
   const [expandedStreamId, setExpandedStreamId] = useState<string | null>(null);
@@ -449,6 +470,21 @@ export function StreamsTable({
               )}
             </tbody>
           </table>
+          <div
+            ref={sentinelRef}
+            style={{ height: 1 }}
+            data-testid="infinite-scroll-sentinel"
+          />
+          {loadingMore && (
+            <div style={{ textAlign: "center", padding: "1rem", color: "var(--color-muted)" }}>
+              Loading more streams...
+            </div>
+          )}
+          {!hasMore && streams.length > 0 && (
+            <div style={{ textAlign: "center", padding: "1rem", color: "var(--color-muted)" }}>
+              End of results
+            </div>
+          )}
         </div>
       </div>
 

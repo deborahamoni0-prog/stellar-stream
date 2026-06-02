@@ -41,6 +41,8 @@ describe("useUrlFilters", () => {
             asset: "USDC",
             sender: "",
             recipient: "",
+            sort: "",
+            page: undefined,
         });
     });
 
@@ -116,6 +118,67 @@ describe("useUrlFilters", () => {
         expect(result.current.view).toBe("sender");
         const searchParams = new URLSearchParams(window.location.search);
         expect(searchParams.get("view")).toBe("sender");
+    });
+
+    it("should read sort and page from URL parameters", () => {
+        const url = new URL("http://localhost/?sort=amount&page=2");
+        vi.stubGlobal("location", {
+            ...window.location,
+            search: url.search,
+        });
+
+        const { result } = renderHook(() => useUrlFilters());
+
+        expect(result.current.filters.sort).toBe("amount");
+        expect(result.current.filters.page).toBe(2);
+    });
+
+    it("should sync sort parameter to URL", () => {
+        const { result } = renderHook(() => useUrlFilters());
+
+        act(() => {
+            result.current.setFilters({
+                status: "",
+                asset: "",
+                sender: "",
+                recipient: "",
+                sort: "createdAt",
+            });
+        });
+
+        const searchParams = new URLSearchParams(window.location.search);
+        expect(searchParams.get("sort")).toBe("createdAt");
+    });
+
+    it("should sync page parameter to URL only when greater than 1", () => {
+        const { result } = renderHook(() => useUrlFilters());
+
+        act(() => {
+            result.current.setFilters({
+                status: "",
+                asset: "",
+                sender: "",
+                recipient: "",
+                page: 2,
+            });
+        });
+
+        const searchParams = new URLSearchParams(window.location.search);
+        expect(searchParams.get("page")).toBe("2");
+
+        // Page 1 should not be in URL
+        act(() => {
+            result.current.setFilters({
+                status: "",
+                asset: "",
+                sender: "",
+                recipient: "",
+                page: 1,
+            });
+        });
+
+        const searchParams2 = new URLSearchParams(window.location.search);
+        expect(searchParams2.has("page")).toBe(false);
     });
 
     it("should handle opening and closing streams via URL", () => {

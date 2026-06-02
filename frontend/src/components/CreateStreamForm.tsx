@@ -436,10 +436,13 @@ export function CreateStreamForm({
             onKeyDown={(e) => {
               if (["e", "E", "+"].includes(e.key)) e.preventDefault();
             }}
-            aria-describedby={errors.totalAmount ? "amount-error" : undefined}
+            aria-describedby={errors.totalAmount ? "amount-error" : "amount-hint"}
             aria-invalid={!!errors.totalAmount}
             required
           />
+          <span id="amount-hint" className="field-hint">
+            Enter a positive number
+          </span>
           {errors.totalAmount && (
             <span id="amount-error" className="field-error" role="alert">
               {errors.totalAmount}
@@ -534,7 +537,7 @@ export function CreateStreamForm({
         <button
           className="btn-primary"
           type="submit"
-          disabled={isSubmitting || (submitAttempted && !formValid)}
+          disabled={isSubmitting || !formValid}
           aria-busy={isSubmitting}
         >
           {isSubmitting ? "Estimating fee..." : "Create Stream"}

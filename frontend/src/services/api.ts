@@ -109,24 +109,35 @@ export interface ListStreamsFilters {
   status?: string;
   asset?: string;
   q?: string;
+  sort?: string;
+  page?: number;
+  limit?: number;
 }
 
-export async function listStreams(filters?: ListStreamsFilters): Promise<Stream[]> {
+export interface PaginatedResult<T> {
+  data: T[];
+  total: number;
+  page: number;
+  limit: number;
+}
+
+export async function listStreams(filters?: ListStreamsFilters): Promise<PaginatedResult<Stream>> {
   const params = new URLSearchParams();
   if (filters?.recipient) params.set("recipient", filters.recipient);
   if (filters?.sender) params.set("sender", filters.sender);
   if (filters?.status) params.set("status", filters.status);
   if (filters?.asset) params.set("asset", filters.asset);
   if (filters?.q) params.set("q", filters.q);
+  if (filters?.sort) params.set("sort", filters.sort);
+  if (filters?.page) params.set("page", String(filters.page));
+  if (filters?.limit) params.set("limit", String(filters.limit));
 
   const q = params.toString();
   const url = q ? `${API_BASE}/streams?${q}` : `${API_BASE}/streams`;
 
-  return fetchWithCache(url, async () => {
-    const response = await fetch(url);
-    const body = await parseResponse<{ data: Stream[] }>(response);
-    return body.data;
-  });
+  const response = await fetch(url);
+  const body = await parseResponse<{ data: Stream[]; total: number; page: number; limit: number }>(response);
+  return body;
 }
 
 export async function listRecipientStreams(accountId: string): Promise<Stream[]> {

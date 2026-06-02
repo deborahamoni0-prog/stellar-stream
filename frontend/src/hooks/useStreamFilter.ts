@@ -7,6 +7,8 @@ export interface StreamFilters {
   recipient: string;
   assetCode: string;
   q: string;
+  sort: string;
+  page: number;
 }
 
 type FilterKey = keyof StreamFilters;
@@ -17,16 +19,22 @@ const EMPTY_FILTERS: StreamFilters = {
   recipient: "",
   assetCode: "",
   q: "",
+  sort: "",
+  page: 1,
 };
 
 function getFiltersFromUrl(): StreamFilters {
   const params = new URLSearchParams(window.location.search);
+  const rawPage = params.get("page");
+  const page = rawPage ? parseInt(rawPage, 10) : 1;
   return {
     status: params.get("status") ?? "",
     sender: params.get("sender") ?? "",
     recipient: params.get("recipient") ?? "",
     assetCode: params.get("assetCode") ?? params.get("asset") ?? "",
     q: params.get("q") ?? "",
+    sort: params.get("sort") ?? "",
+    page: !isNaN(page) && page >= 1 ? page : 1,
   };
 }
 
@@ -40,8 +48,9 @@ export function useStreamFilter(streams: Stream[]) {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const syncValue = (key: FilterKey) => {
-      const value = filters[key].trim();
-      if (!value) {
+      const value = filters[key];
+      if (typeof value === "number") return;
+      if (!value.trim()) {
         params.delete(key);
         if (key === "assetCode") params.delete("asset");
         return;
@@ -55,6 +64,12 @@ export function useStreamFilter(streams: Stream[]) {
     syncValue("recipient");
     syncValue("assetCode");
     syncValue("q");
+    syncValue("sort");
+    if (filters.page > 1) {
+      params.set("page", String(filters.page));
+    } else {
+      params.delete("page");
+    }
 
     const next = params.toString();
     const nextUrl = next ? `${window.location.pathname}?${next}` : window.location.pathname;

@@ -141,3 +141,108 @@ describe("StreamsTable virtual scrolling", () => {
     expect(document.activeElement).toBe(cancelButton);
   });
 });
+
+describe("StreamsTable infinite scroll", () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.clearAllMocks();
+  });
+
+  it("renders sentinel element for infinite scroll", () => {
+    render(<StreamsTable {...defaultProps} onLoadMore={vi.fn()} hasMore={true} />);
+    expect(screen.getByTestId("infinite-scroll-sentinel")).toBeInTheDocument();
+  });
+
+  it("shows loading indicator when loadingMore is true", () => {
+    render(<StreamsTable {...defaultProps} loadingMore={true} />);
+    expect(screen.getByText(/Loading more streams/i)).toBeInTheDocument();
+  });
+
+  it("shows end of results message when hasMore is false", () => {
+    render(<StreamsTable {...defaultProps} hasMore={false} />);
+    expect(screen.getByText(/End of results/i)).toBeInTheDocument();
+  });
+
+  it("calls onLoadMore when sentinel becomes visible", () => {
+    const onLoadMore = vi.fn();
+    let observerCallback: IntersectionObserverCallback = () => {};
+
+    vi.spyOn(window, "IntersectionObserver").mockImplementation(
+      (callback) => {
+        observerCallback = callback;
+        return { observe: vi.fn(), disconnect: vi.fn(), unobserve: vi.fn(), root: null, rootMargin: "", thresholds: [] };
+      },
+    );
+
+    render(
+      <StreamsTable
+        {...defaultProps}
+        onLoadMore={onLoadMore}
+        hasMore={true}
+        loadingMore={false}
+      />,
+    );
+
+    // Simulate sentinel becoming visible
+    const sentinel = screen.getByTestId("infinite-scroll-sentinel");
+    observerCallback([{ isIntersecting: true, target: sentinel } as unknown as IntersectionObserverEntry], null!);
+
+    expect(onLoadMore).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not call onLoadMore when hasMore is false", () => {
+    const onLoadMore = vi.fn();
+    let observerCallback: IntersectionObserverCallback = () => {};
+
+    vi.spyOn(window, "IntersectionObserver").mockImplementation(
+      (callback) => {
+        observerCallback = callback;
+        return { observe: vi.fn(), disconnect: vi.fn(), unobserve: vi.fn(), root: null, rootMargin: "", thresholds: [] };
+      },
+    );
+
+    render(
+      <StreamsTable
+        {...defaultProps}
+        onLoadMore={onLoadMore}
+        hasMore={false}
+        loadingMore={false}
+      />,
+    );
+
+    const sentinel = screen.getByTestId("infinite-scroll-sentinel");
+    observerCallback([{ isIntersecting: true, target: sentinel } as unknown as IntersectionObserverEntry], null!);
+
+    expect(onLoadMore).not.toHaveBeenCalled();
+  });
+
+  it("does not call onLoadMore when already loadingMore", () => {
+    const onLoadMore = vi.fn();
+    let observerCallback: IntersectionObserverCallback = () => {};
+
+    vi.spyOn(window, "IntersectionObserver").mockImplementation(
+      (callback) => {
+        observerCallback = callback;
+        return { observe: vi.fn(), disconnect: vi.fn(), unobserve: vi.fn(), root: null, rootMargin: "", thresholds: [] };
+      },
+    );
+
+    render(
+      <StreamsTable
+        {...defaultProps}
+        onLoadMore={onLoadMore}
+        hasMore={true}
+        loadingMore={true}
+      />,
+    );
+
+    const sentinel = screen.getByTestId("infinite-scroll-sentinel");
+    observerCallback([{ isIntersecting: true, target: sentinel } as unknown as IntersectionObserverEntry], null!);
+
+    expect(onLoadMore).not.toHaveBeenCalled();
+  });
+});
