@@ -2,6 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import request from "supertest";
 import { app } from "./index";
 import { initDb, getDb } from "./services/db";
+import { initCache, getCache } from "./services/cache";
 import { Keypair } from "@stellar/stellar-sdk";
 import path from "path";
 import fs from "fs";
@@ -37,16 +38,18 @@ describe("Backend Integration Tests", () => {
     // Set test database path
     process.env.DB_PATH = TEST_DB_PATH;
 
-    // Initialize database
+    // Initialize database and cache
     initDb();
+    initCache();
   });
 
-  beforeEach(() => {
-    // Clean database before each test
+  beforeEach(async () => {
+    // Clean database and cache before each test
     const db = getDb();
     db.exec("DELETE FROM stream_events");
     db.exec("DELETE FROM webhook_deliveries");
     db.exec("DELETE FROM streams");
+    await getCache().clear();
   });
 
   afterAll(() => {
@@ -660,6 +663,180 @@ describe("Backend Integration Tests", () => {
         expect(response.status).toBe(200);
         expect(response.body.data).toEqual([]);
         expect(response.body.total).toBe(0);
+      });
+    });
+
+    describe("GET /api/streams/sender/:address", () => {
+      it("should return streams for a valid sender address", async () => {
+        const response = await request(app)
+          .get(`/api/streams/sender/${mockStream.sender}`);
+
+        expect(response.status).toBe(200);
+        expect(response.body.data).toHaveLength(1);
+        expect(response.body.data[0].sender).toBe(mockStream.sender);
+        expect(response.body.data[0].progress).toBeDefined();
+        expect(response.body.total).toBe(1);
+      });
+
+      it("should return empty array for sender with no streams", async () => {
+        const emptySender = Keypair.random().publicKey();
+        const response = await request(app)
+          .get(`/api/streams/sender/${emptySender}`);
+
+        expect(response.status).toBe(200);
+        expect(response.body.data).toEqual([]);
+        expect(response.body.total).toBe(0);
+      });
+
+      it("should return 400 for invalid Stellar address format", async () => {
+        const response = await request(app)
+          .get("/api/streams/sender/invalid-address");
+
+        expect(response.status).toBe(400);
+        expect(response.body.error).toContain("must be a valid Stellar account ID");
+      });
+
+      it("should return 400 for address not starting with G", async () => {
+        const response = await request(app)
+          .get("/api/streams/sender/ABBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB");
+
+        expect(response.status).toBe(400);
+        expect(response.body.error).toContain("must be a valid Stellar account ID");
+      });
+
+      it("should support pagination", async () => {
+        const db = getDb();
+        for (let i = 2; i <= 4; i++) {
+          db.prepare(`
+            INSERT INTO streams (id, sender, recipient, asset_code, total_amount, duration_seconds, start_at, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          `).run(
+            i.toString(),
+            mockStream.sender,
+            mockStream.recipient,
+            mockStream.assetCode,
+            mockStream.totalAmount,
+            mockStream.durationSeconds,
+            mockStream.startAt,
+            mockStream.createdAt + i,
+          );
+        }
+
+        const response = await request(app)
+          .get(`/api/streams/sender/${mockStream.sender}`)
+          .query({ page: 1, limit: 2 });
+
+        expect(response.status).toBe(200);
+        expect(response.body.total).toBe(4);
+        expect(response.body.data).toHaveLength(2);
+        expect(response.body.page).toBe(1);
+        expect(response.body.limit).toBe(2);
+      });
+
+      it("should filter by status", async () => {
+        const response = await request(app)
+          .get(`/api/streams/sender/${mockStream.sender}`)
+          .query({ status: "scheduled" });
+
+        expect(response.status).toBe(200);
+        expect(response.body.data).toHaveLength(1);
+        expect(response.body.data[0].progress.status).toBe("scheduled");
+      });
+
+      it("should return 400 for invalid status query param", async () => {
+        const response = await request(app)
+          .get(`/api/streams/sender/${mockStream.sender}`)
+          .query({ status: "invalid" });
+
+        expect(response.status).toBe(400);
+        expect(response.body.error).toContain("status must be one of");
+      });
+    });
+
+    describe("GET /api/streams/recipient/:address", () => {
+      it("should return streams for a valid recipient address", async () => {
+        const response = await request(app)
+          .get(`/api/streams/recipient/${mockStream.recipient}`);
+
+        expect(response.status).toBe(200);
+        expect(response.body.data).toHaveLength(1);
+        expect(response.body.data[0].recipient).toBe(mockStream.recipient);
+        expect(response.body.data[0].progress).toBeDefined();
+        expect(response.body.total).toBe(1);
+      });
+
+      it("should return empty array for recipient with no streams", async () => {
+        const emptyRecipient = Keypair.random().publicKey();
+        const response = await request(app)
+          .get(`/api/streams/recipient/${emptyRecipient}`);
+
+        expect(response.status).toBe(200);
+        expect(response.body.data).toEqual([]);
+        expect(response.body.total).toBe(0);
+      });
+
+      it("should return 400 for invalid Stellar address format", async () => {
+        const response = await request(app)
+          .get("/api/streams/recipient/invalid-address");
+
+        expect(response.status).toBe(400);
+        expect(response.body.error).toContain("must be a valid Stellar account ID");
+      });
+
+      it("should return 400 for address not starting with G", async () => {
+        const response = await request(app)
+          .get("/api/streams/recipient/ABBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB");
+
+        expect(response.status).toBe(400);
+        expect(response.body.error).toContain("must be a valid Stellar account ID");
+      });
+
+      it("should support pagination", async () => {
+        const db = getDb();
+        for (let i = 2; i <= 4; i++) {
+          db.prepare(`
+            INSERT INTO streams (id, sender, recipient, asset_code, total_amount, duration_seconds, start_at, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          `).run(
+            i.toString(),
+            mockStream.sender,
+            mockStream.recipient,
+            mockStream.assetCode,
+            mockStream.totalAmount,
+            mockStream.durationSeconds,
+            mockStream.startAt,
+            mockStream.createdAt + i,
+          );
+        }
+
+        const response = await request(app)
+          .get(`/api/streams/recipient/${mockStream.recipient}`)
+          .query({ page: 1, limit: 2 });
+
+        expect(response.status).toBe(200);
+        expect(response.body.total).toBe(4);
+        expect(response.body.data).toHaveLength(2);
+        expect(response.body.page).toBe(1);
+        expect(response.body.limit).toBe(2);
+      });
+
+      it("should filter by status", async () => {
+        const response = await request(app)
+          .get(`/api/streams/recipient/${mockStream.recipient}`)
+          .query({ status: "scheduled" });
+
+        expect(response.status).toBe(200);
+        expect(response.body.data).toHaveLength(1);
+        expect(response.body.data[0].progress.status).toBe("scheduled");
+      });
+
+      it("should return 400 for invalid status query param", async () => {
+        const response = await request(app)
+          .get(`/api/streams/recipient/${mockStream.recipient}`)
+          .query({ status: "bogus" });
+
+        expect(response.status).toBe(400);
+        expect(response.body.error).toContain("status must be one of");
       });
     });
   });

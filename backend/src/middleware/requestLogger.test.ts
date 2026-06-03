@@ -1,14 +1,15 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { EventEmitter } from "events";
 import { requestLogger } from "./requestLogger";
+import { logger } from "../logger";
 import type { Request, Response } from "express";
 
 describe("requestLogger", () => {
   const originalNodeEnv = process.env.NODE_ENV;
-  const consoleLogSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+  const loggerInfoSpy = vi.spyOn(logger, "info").mockImplementation(() => logger);
 
   beforeEach(() => {
-    consoleLogSpy.mockClear();
+    loggerInfoSpy.mockClear();
     process.env.NODE_ENV = "development";
   });
 
@@ -36,11 +37,14 @@ describe("requestLogger", () => {
 
     res.emit("finish");
 
-    expect(consoleLogSpy).toHaveBeenCalledTimes(1);
-    const logOutput = consoleLogSpy.mock.calls[0][0] as string;
-    expect(logOutput).toContain("POST /api/streams");
-    expect(logOutput).toContain("201");
-    expect(logOutput).not.toContain(authHeader);
-    expect(logOutput.toLowerCase()).not.toContain("authorization");
+    expect(loggerInfoSpy).toHaveBeenCalledTimes(1);
+    const logPayload = loggerInfoSpy.mock.calls[0][0] as Record<string, unknown>;
+    expect(logPayload).toMatchObject({
+      method: "POST",
+      route: "/api/streams",
+      statusCode: 201,
+    });
+    expect(JSON.stringify(logPayload)).not.toContain(authHeader);
+    expect(JSON.stringify(logPayload).toLowerCase()).not.toContain("authorization");
   });
 });

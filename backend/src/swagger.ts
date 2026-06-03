@@ -955,6 +955,248 @@ export const swaggerDocument = {
         },
       },
     },
+    "/api/streams/sender/{address}": {
+      get: {
+        summary: "List streams by sender address",
+        description:
+          "Returns all streams where the given Stellar account is the sender. " +
+          "Supports the same pagination, filtering, and search parameters as GET /api/streams. " +
+          "Results are cached for 5 seconds per address.",
+        parameters: [
+          {
+            name: "address",
+            in: "path",
+            required: true,
+            description:
+              "Stellar account address of the sender. Must be a valid Ed25519 public key " +
+              "starting with 'G' and exactly 56 characters long (e.g. GABC...XYZ).",
+            schema: {
+              type: "string",
+              pattern: "^G[A-Z2-7]{55}$",
+              example: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+            },
+          },
+          {
+            name: "status",
+            in: "query",
+            required: false,
+            description: "Filter by stream status.",
+            schema: {
+              type: "string",
+              enum: ["scheduled", "active", "completed", "canceled"],
+            },
+          },
+          {
+            name: "recipient",
+            in: "query",
+            required: false,
+            description: "Filter by recipient account ID (case-insensitive).",
+            schema: { type: "string" },
+          },
+          {
+            name: "asset",
+            in: "query",
+            required: false,
+            description: "Filter by asset code (case-insensitive exact match).",
+            schema: { type: "string" },
+          },
+          {
+            name: "assetCode",
+            in: "query",
+            required: false,
+            description:
+              "Filter by one or more asset codes (comma-separated, case-insensitive). Example: ?assetCode=USDC,XLM",
+            schema: { type: "string" },
+          },
+          {
+            name: "q",
+            in: "query",
+            required: false,
+            description:
+              "Search term across stream ID, sender, recipient, and asset code (case-insensitive).",
+            schema: { type: "string" },
+          },
+          {
+            name: "minAmount",
+            in: "query",
+            required: false,
+            description: "Filter streams with totalAmount >= minAmount.",
+            schema: { type: "number", minimum: 0 },
+          },
+          {
+            name: "maxAmount",
+            in: "query",
+            required: false,
+            description: "Filter streams with totalAmount <= maxAmount.",
+            schema: { type: "number", minimum: 0 },
+          },
+          {
+            name: "page",
+            in: "query",
+            required: false,
+            description: "Page number (>=1). Pagination is enabled when either page or limit is provided.",
+            schema: { type: "integer", minimum: 1 },
+          },
+          {
+            name: "limit",
+            in: "query",
+            required: false,
+            description: "Page size (1..100). Defaults to 20 in pagination mode.",
+            schema: { type: "integer", minimum: 1, maximum: 100 },
+          },
+        ],
+        responses: {
+          "200": {
+            description: "Paginated list of streams for the sender.",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    data: {
+                      type: "array",
+                      items: { $ref: "#/components/schemas/Stream" },
+                    },
+                    total: { type: "integer", example: 5 },
+                    page: { type: "integer", example: 1 },
+                    limit: { type: "integer", example: 20 },
+                  },
+                },
+              },
+            },
+          },
+          "400": {
+            description: "Invalid Stellar address format or query parameter.",
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/Error" },
+              },
+            },
+          },
+        },
+      },
+    },
+    "/api/streams/recipient/{address}": {
+      get: {
+        summary: "List streams by recipient address",
+        description:
+          "Returns all streams where the given Stellar account is the recipient. " +
+          "Supports the same pagination, filtering, and search parameters as GET /api/streams. " +
+          "Results are cached for 5 seconds per address.",
+        parameters: [
+          {
+            name: "address",
+            in: "path",
+            required: true,
+            description:
+              "Stellar account address of the recipient. Must be a valid Ed25519 public key " +
+              "starting with 'G' and exactly 56 characters long (e.g. GABC...XYZ).",
+            schema: {
+              type: "string",
+              pattern: "^G[A-Z2-7]{55}$",
+              example: "GBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+            },
+          },
+          {
+            name: "status",
+            in: "query",
+            required: false,
+            description: "Filter by stream status.",
+            schema: {
+              type: "string",
+              enum: ["scheduled", "active", "completed", "canceled"],
+            },
+          },
+          {
+            name: "sender",
+            in: "query",
+            required: false,
+            description: "Filter by sender account ID (case-insensitive).",
+            schema: { type: "string" },
+          },
+          {
+            name: "asset",
+            in: "query",
+            required: false,
+            description: "Filter by asset code (case-insensitive exact match).",
+            schema: { type: "string" },
+          },
+          {
+            name: "assetCode",
+            in: "query",
+            required: false,
+            description:
+              "Filter by one or more asset codes (comma-separated, case-insensitive). Example: ?assetCode=USDC,XLM",
+            schema: { type: "string" },
+          },
+          {
+            name: "q",
+            in: "query",
+            required: false,
+            description:
+              "Search term across stream ID, sender, recipient, and asset code (case-insensitive).",
+            schema: { type: "string" },
+          },
+          {
+            name: "minAmount",
+            in: "query",
+            required: false,
+            description: "Filter streams with totalAmount >= minAmount.",
+            schema: { type: "number", minimum: 0 },
+          },
+          {
+            name: "maxAmount",
+            in: "query",
+            required: false,
+            description: "Filter streams with totalAmount <= maxAmount.",
+            schema: { type: "number", minimum: 0 },
+          },
+          {
+            name: "page",
+            in: "query",
+            required: false,
+            description: "Page number (>=1). Pagination is enabled when either page or limit is provided.",
+            schema: { type: "integer", minimum: 1 },
+          },
+          {
+            name: "limit",
+            in: "query",
+            required: false,
+            description: "Page size (1..100). Defaults to 20 in pagination mode.",
+            schema: { type: "integer", minimum: 1, maximum: 100 },
+          },
+        ],
+        responses: {
+          "200": {
+            description: "Paginated list of streams for the recipient.",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    data: {
+                      type: "array",
+                      items: { $ref: "#/components/schemas/Stream" },
+                    },
+                    total: { type: "integer", example: 3 },
+                    page: { type: "integer", example: 1 },
+                    limit: { type: "integer", example: 20 },
+                  },
+                },
+              },
+            },
+          },
+          "400": {
+            description: "Invalid Stellar address format or query parameter.",
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/Error" },
+              },
+            },
+          },
+        },
+      },
+    },
     "/api/streams/{id}/cancel": {
       post: {
         summary: "Cancel a Stream",

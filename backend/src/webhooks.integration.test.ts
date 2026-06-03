@@ -7,6 +7,7 @@ import jwt from "jsonwebtoken";
 import path from "path";
 import fs from "fs";
 import { Keypair } from "@stellar/stellar-sdk";
+import { logger } from "./logger";
 
 // Use a separate test database for isolation
 const TEST_DB_PATH = path.join(__dirname, "..", "data", "test-webhooks.db");
@@ -43,7 +44,7 @@ describe("Webhook Dead Letter Integration Tests", () => {
       try {
         fs.unlinkSync(TEST_DB_PATH);
       } catch (err) {
-        console.error("Failed to delete test DB file:", err);
+        logger.error({ err, path: TEST_DB_PATH }, "failed to delete test DB file");
       }
     }
   });

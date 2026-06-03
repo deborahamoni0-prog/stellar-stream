@@ -34,12 +34,19 @@ export const assetCodeSchema = z
 export const totalAmountSchema = z.coerce
   .number()
   .finite("Total amount must be a valid number.")
-  .positive("Amount must be greater than zero.");
+  .positive("Amount must be greater than zero.")
+  .refine(
+    (value) => {
+      const decimalStr = value.toString().split(".")[1];
+      return !decimalStr || decimalStr.length <= 7;
+    },
+    "Amount cannot have more than 7 decimal places."
+  );
 
 export const durationSecondsSchema = z.coerce
   .number()
   .int("durationSeconds must be a whole number of seconds.")
-  .min(60, "durationSeconds must be at least 60 seconds.");
+  .min(1, "durationSeconds must be at least 1 second.");
 
 export const unixTimestampSchema = z.coerce
   .number()
@@ -63,6 +70,16 @@ export const createStreamPayloadSchema = z
         message: "Recipient must differ from the sender account.",
       });
     }
+    if (payload.startAt !== undefined) {
+      const maxFutureTimestamp = Math.floor(Date.now() / 1000) + 365 * 24 * 60 * 60;
+      if (payload.startAt > maxFutureTimestamp) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["startAt"],
+          message: "startAt cannot be more than 1 year in the future.",
+        });
+      }
+    }
   });
 
 export function createStreamPayloadWithAllowedAssetsSchema(
@@ -83,6 +100,15 @@ export function createStreamPayloadWithAllowedAssetsSchema(
 
 export const updateStreamStartAtSchema = z.object({
   startAt: unixTimestampSchema,
+}).superRefine((payload, ctx) => {
+  const maxFutureTimestamp = Math.floor(Date.now() / 1000) + 365 * 24 * 60 * 60;
+  if (payload.startAt > maxFutureTimestamp) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["startAt"],
+      message: "startAt cannot be more than 1 year in the future.",
+    });
+  }
 });
 
 const VALID_EVENT_TYPES = ["created", "claimed", "canceled", "start_time_updated", "paused", "resumed"] as const;

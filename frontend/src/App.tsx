@@ -15,6 +15,7 @@ import { useMetricsHistory } from "./hooks/useMetricsHistory";
 import { defaultStreamFilters, useStreamFilter } from "./hooks/useStreamFilter";
 import { useToast } from "./hooks/useToast";
 import { useWebSocket } from "./hooks/useWebSocket";
+import { useUrlFilters } from "./hooks/useUrlFilters";
 import {
   ApiError,
   cancelStream,
@@ -28,12 +29,10 @@ import {
 import { ListStreamsFilters } from "./services/api";
 import { OpenIssue, Stream } from "./types/stream";
 
-type ViewMode = "dashboard" | "recipient" | "sender";
-
 function App() {
   const wallet = useFreighter();
   const { showToast } = useToast();
-  const [viewMode, setViewMode] = useState<ViewMode>("dashboard");
+  const { view: viewMode, filters: urlFilters, setView: setViewMode } = useUrlFilters();
   const [detailStreamId, setDetailStreamId] = useState<string | null>(null);
   const [streams, setStreams] = useState<Stream[]>([]);
   const [issues, setIssues] = useState<OpenIssue[]>([]);
@@ -61,6 +60,9 @@ function App() {
   }, [theme]);
 
   const { filters, filteredStreams, setFilter } = useStreamFilter(streams);
+  const [hasMore, setHasMore] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+
   const wsUrl = import.meta.env.VITE_WS_URL ?? "";
   const { lastMessage } = useWebSocket<{
     eventType?: string;
@@ -89,12 +91,14 @@ function App() {
 
   const apiFilters: ListStreamsFilters = useMemo(
     () => ({
-      status: filters.status,
-      sender: filters.sender,
-      recipient: filters.recipient,
-      asset: filters.assetCode,
+      status: filters.status || urlFilters.status,
+      sender: filters.sender || urlFilters.sender,
+      recipient: filters.recipient || urlFilters.recipient,
+      asset: filters.assetCode || urlFilters.asset,
+      sort: filters.sort || urlFilters.sort,
+      page: filters.page > 1 ? filters.page : (urlFilters.page ?? undefined),
     }),
-    [filters],
+    [urlFilters, filters],
   );
 
   const tableFilters: ListStreamsFilters = useMemo(
@@ -109,14 +113,29 @@ function App() {
   );
 
   async function refreshStreams(currentFilters: ListStreamsFilters): Promise<void> {
-    const data = await listStreams(currentFilters);
-    setStreams(data);
+    const result = await listStreams({ ...currentFilters, limit: 20 });
+    setStreams(result.data);
+    setHasMore(result.page * result.limit < result.total);
+  }
+
+  async function loadMore(): Promise<void> {
+    if (loadingMore || !hasMore) return;
+    setLoadingMore(true);
+    try {
+      const currentPage = urlFilters.page ?? 1;
+      const nextPage = currentPage + 1;
+      const result = await listStreams({ ...apiFilters, page: nextPage, limit: 20 });
+      setStreams((prev) => [...prev, ...result.data]);
+      setHasMore(result.page * result.limit < result.total);
+    } finally {
+      setLoadingMore(false);
+    }
   }
 
   async function refreshUnfilteredCount(): Promise<void> {
     try {
-      const all = await listStreams();
-      setTotalUnfilteredCount(all.length);
+      const all = await listStreams({ limit: 1 });
+      setTotalUnfilteredCount(all.total);
     } catch {
       // Ignore count errors; feature is best-effort.
     }
@@ -368,6 +387,9 @@ function App() {
                 setEditingStream({ stream, triggerRef })
               }
               onOpenStream={setDetailStreamId}
+              onLoadMore={loadMore}
+              hasMore={hasMore}
+              loadingMore={loadingMore}
             />
           </section>
 

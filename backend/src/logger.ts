@@ -1,6 +1,7 @@
 import pino from "pino";
 
 const STELLAR_SECRET_REGEX = /^S[0-9A-Z]{55}$/;
+const isProduction = process.env.NODE_ENV === "production";
 
 function redactValue(value: unknown): unknown {
   if (typeof value === "string" && STELLAR_SECRET_REGEX.test(value)) {
@@ -32,10 +33,26 @@ const logger = pino({
   redact: { paths: ["*.secretKey", "*.privateKey", "*.seed"], censor: "[REDACTED]" },
   // ensure values (strings) that match Stellar secret pattern are redacted anywhere
   formatters: {
+    bindings(bindings) {
+      return {
+        pid: bindings.pid,
+        host: bindings.hostname,
+      };
+    },
     log(obj: Record<string, any>) {
       return redactObject(obj);
     },
   },
+  transport: isProduction
+    ? undefined
+    : {
+        target: "pino-pretty",
+        options: {
+          colorize: true,
+          ignore: "pid,host",
+          translateTime: "SYS:standard",
+        },
+      },
 });
 
 export { logger, redactObject, STELLAR_SECRET_REGEX };

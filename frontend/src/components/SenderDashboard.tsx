@@ -60,9 +60,9 @@ export function SenderDashboard({ senderAddress, onEditStartTime }: SenderDashbo
 
     const load = async () => {
       try {
-        const data = await listStreams({ sender: senderAddress });
+        const result = await listStreams({ sender: senderAddress });
         if (!active) return;
-        setStreams(data);
+        setStreams(result.data);
       } catch (err) {
         if (!active) return;
         setError(err instanceof Error ? err.message : "Failed to load streams.");
@@ -76,8 +76,8 @@ export function SenderDashboard({ senderAddress, onEditStartTime }: SenderDashbo
     // Poll every 5 seconds to keep metrics and progress fresh
     const interval = setInterval(async () => {
       try {
-        const data = await listStreams({ sender: senderAddress });
-        if (active) setStreams(data);
+        const result = await listStreams({ sender: senderAddress });
+        if (active) setStreams(result.data);
       } catch {
         // Silent fail on polling
       }
@@ -163,6 +163,7 @@ export function SenderDashboard({ senderAddress, onEditStartTime }: SenderDashbo
   }
 
   if (streams.length === 0 && !showCreateForm) {
+  if (streams.length === 0) {
     return (
       <div className="card recipient-dashboard-card">
         <h2 className="recipient-dashboard-title">Sender Dashboard</h2>
@@ -194,8 +195,8 @@ export function SenderDashboard({ senderAddress, onEditStartTime }: SenderDashbo
     if (!window.confirm("Are you sure you want to cancel this stream?")) return;
     try {
       await cancelStream(id);
-      const data = await listStreams({ sender: senderAddress! });
-      setStreams(data);
+      const result = await listStreams({ sender: senderAddress! });
+      setStreams(result.data);
     } catch (err) {
       alert(err instanceof Error ? err.message : "Failed to cancel stream");
     }

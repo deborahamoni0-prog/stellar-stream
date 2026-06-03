@@ -111,16 +111,8 @@ describe('CreateStreamForm Component', () => {
     fireEvent.change(durationInput, { target: { value: '0' } });
     fireEvent.blur(durationInput);
 
-    // In CreateStreamForm, submitAttempted must be true or field must be touched for errors to show usually, 
-    // but here validateForm is called every render. 
-    // However, the button is disabled if (submitAttempted && !formValid) OR isSubmitting.
-    // Wait, the requirement says "assert inline error and submit disabled".
-    // Let's click submit first to set submitAttempted to true.
-    const submitButton = screen.getByRole('button', { name: /Create Stream/i });
-    fireEvent.click(submitButton);
-
     expect(screen.getByText(/Duration must be at least 1 minute/i)).toBeInTheDocument();
-    await waitFor(() => expect(submitButton).toBeDisabled());
+    expect(screen.getByRole('button', { name: /Create Stream/i })).toBeDisabled();
   });
 
   it('shows error when total amount is 0 or negative', async () => {
@@ -135,7 +127,7 @@ describe('CreateStreamForm Component', () => {
     await user.click(submitButton);
 
     expect(screen.getByText(/greater than zero/i)).toBeInTheDocument();
-    await waitFor(() => expect(submitButton).toBeDisabled());
+    expect(submitButton).toBeDisabled();
   });
 
   it('shows error for invalid Stellar address format', async () => {
@@ -150,7 +142,7 @@ describe('CreateStreamForm Component', () => {
     await user.click(submitButton);
 
     expect(screen.getByText(/valid Stellar account ID/i)).toBeInTheDocument();
-    await waitFor(() => expect(submitButton).toBeDisabled());
+    expect(submitButton).toBeDisabled();
   });
 
   it('shows loading state during submission', async () => {

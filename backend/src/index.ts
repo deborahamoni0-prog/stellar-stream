@@ -53,6 +53,7 @@ import {
   estimateCreateStreamFee,
   refreshStreamStatuses,
   resumeStream,
+  StreamRecord,
   StreamStatus,
   syncStreams,
   updateStreamStartAt,
@@ -75,6 +76,7 @@ import {
 import { validateEnv } from "./config/validateEnv";
 import { getMetricsHistory } from "./services/metricsHistory";
 import { initCache } from "./services/cache";
+import { logger } from "./logger";
 
 const STREAM_STATUSES: StreamStatus[] = [
   "scheduled",
@@ -321,7 +323,7 @@ app.get(
       const data = await getMetricsHistory(days);
       res.json({ data });
     } catch (error: any) {
-      console.error("Failed to fetch metrics history:", error);
+      logger.error({ err: error }, "failed to fetch metrics history");
       const normalizedError = normalizeUnknownApiError(
         error,
         "Failed to fetch metrics history.",
@@ -345,7 +347,7 @@ app.get("/api/assets", (_req: Request, res: Response) => {
   });
 });
 
-
+app.get("/api/streams", readLimiter, (req: Request, res: Response) => {
   const parsedQuery = listStreamsQuerySchema.safeParse(req.query);
   if (!parsedQuery.success) {
     sendValidationError(req, res, parsedQuery.error.issues);
@@ -539,7 +541,7 @@ app.post(
       const { amounts, at } = await getOnChainClaimableBatch(parsed.data.streamIds);
       res.json({ amounts, at });
     } catch (error: unknown) {
-      console.error("Failed to simulate claimable batch:", error);
+      logger.error({ err: error }, "failed to simulate claimable batch");
       const normalizedError = normalizeUnknownApiError(
         error,
         "Failed to simulate claimable amounts.",
@@ -552,6 +554,189 @@ app.post(
         { code: normalizedError.code ?? "INTERNAL_ERROR" },
       );
     }
+  },
+);
+
+async function withAddressCache(
+  key: string,
+  fetcher: () => StreamRecord[],
+): Promise<StreamRecord[]> {
+  try {
+    const cache = getCache();
+    const cached = await cache.get<StreamRecord[]>(key);
+    if (cached) return cached;
+    const data = fetcher();
+    await cache.set(key, data, 5);
+    return data;
+  } catch {
+    return fetcher();
+  }
+}
+
+app.get(
+  "/api/streams/sender/:address",
+  readLimiter,
+  async (req: Request, res: Response) => {
+    const parsedParams = senderAccountIdSchema.safeParse({
+      accountId: req.params.address,
+    });
+
+    if (!parsedParams.success) {
+      sendValidationError(req, res, parsedParams.error.issues);
+      return;
+    }
+
+    const address = parsedParams.data.accountId;
+
+    const parsedQuery = listStreamsQuerySchema.safeParse(req.query);
+    if (!parsedQuery.success) {
+      sendValidationError(req, res, parsedQuery.error.issues);
+      return;
+    }
+    const query = parsedQuery.data;
+
+    const rawStreams = await withAddressCache(
+      `streams:sender:${address}`,
+      () => listStreamsBySender(address),
+    );
+
+    let data = rawStreams.map((stream) => ({
+      ...stream,
+      progress: calculateProgress(stream),
+    }));
+
+    if (query.status) {
+      data = data.filter((stream) => stream.progress.status === query.status);
+    }
+    if (query.recipient) {
+      data = data.filter(
+        (stream) =>
+          stream.recipient.toLowerCase() === query.recipient!.toLowerCase(),
+      );
+    }
+    if (query.asset) {
+      data = data.filter(
+        (stream) =>
+          stream.assetCode.toLowerCase() === query.asset!.toLowerCase(),
+      );
+    }
+    if (query.assetCode && query.assetCode.length > 0) {
+      data = data.filter((stream) =>
+        query.assetCode!.includes(stream.assetCode.toUpperCase()),
+      );
+    }
+    if (query.q && query.q.length > 0) {
+      const searchTerm = query.q.toLowerCase();
+      data = data.filter(
+        (stream) =>
+          stream.id.toLowerCase().includes(searchTerm) ||
+          stream.sender.toLowerCase().includes(searchTerm) ||
+          stream.recipient.toLowerCase().includes(searchTerm) ||
+          stream.assetCode.toLowerCase().includes(searchTerm),
+      );
+    }
+    if (query.minAmount !== undefined) {
+      data = data.filter((stream) => stream.totalAmount >= query.minAmount!);
+    }
+    if (query.maxAmount !== undefined) {
+      data = data.filter((stream) => stream.totalAmount <= query.maxAmount!);
+    }
+
+    const hasPage = req.query.page !== undefined;
+    const hasLimit = req.query.limit !== undefined;
+
+    const total = data.length;
+    const page = query.page ?? PAGINATION_DEFAULT_PAGE;
+    const limit =
+      !hasPage && !hasLimit ? total : (query.limit ?? PAGINATION_DEFAULT_LIMIT);
+
+    const offset = (page - 1) * limit;
+    const paginatedData = data.slice(offset, offset + limit);
+
+    res.json({ data: paginatedData, total, page, limit });
+  },
+);
+
+app.get(
+  "/api/streams/recipient/:address",
+  readLimiter,
+  async (req: Request, res: Response) => {
+    const parsedParams = recipientAccountIdSchema.safeParse({
+      accountId: req.params.address,
+    });
+
+    if (!parsedParams.success) {
+      sendValidationError(req, res, parsedParams.error.issues);
+      return;
+    }
+
+    const address = parsedParams.data.accountId;
+
+    const parsedQuery = listStreamsQuerySchema.safeParse(req.query);
+    if (!parsedQuery.success) {
+      sendValidationError(req, res, parsedQuery.error.issues);
+      return;
+    }
+    const query = parsedQuery.data;
+
+    const rawStreams = await withAddressCache(
+      `streams:recipient:${address}`,
+      () => listStreamsByRecipient(address),
+    );
+
+    let data = rawStreams.map((stream) => ({
+      ...stream,
+      progress: calculateProgress(stream),
+    }));
+
+    if (query.status) {
+      data = data.filter((stream) => stream.progress.status === query.status);
+    }
+    if (query.sender) {
+      data = data.filter(
+        (stream) => stream.sender.toLowerCase() === query.sender!.toLowerCase(),
+      );
+    }
+    if (query.asset) {
+      data = data.filter(
+        (stream) =>
+          stream.assetCode.toLowerCase() === query.asset!.toLowerCase(),
+      );
+    }
+    if (query.assetCode && query.assetCode.length > 0) {
+      data = data.filter((stream) =>
+        query.assetCode!.includes(stream.assetCode.toUpperCase()),
+      );
+    }
+    if (query.q && query.q.length > 0) {
+      const searchTerm = query.q.toLowerCase();
+      data = data.filter(
+        (stream) =>
+          stream.id.toLowerCase().includes(searchTerm) ||
+          stream.sender.toLowerCase().includes(searchTerm) ||
+          stream.recipient.toLowerCase().includes(searchTerm) ||
+          stream.assetCode.toLowerCase().includes(searchTerm),
+      );
+    }
+    if (query.minAmount !== undefined) {
+      data = data.filter((stream) => stream.totalAmount >= query.minAmount!);
+    }
+    if (query.maxAmount !== undefined) {
+      data = data.filter((stream) => stream.totalAmount <= query.maxAmount!);
+    }
+
+    const hasPage = req.query.page !== undefined;
+    const hasLimit = req.query.limit !== undefined;
+
+    const total = data.length;
+    const page = query.page ?? PAGINATION_DEFAULT_PAGE;
+    const limit =
+      !hasPage && !hasLimit ? total : (query.limit ?? PAGINATION_DEFAULT_LIMIT);
+
+    const offset = (page - 1) * limit;
+    const paginatedData = data.slice(offset, offset + limit);
+
+    res.json({ data: paginatedData, total, page, limit });
   },
 );
 
@@ -720,6 +905,8 @@ app.get(
       page,
       limit,
     });
+  },
+);
 
 app.post("/api/auth/token", async (req: Request, res: Response) => {
   const transaction = req.body?.transaction;
@@ -733,8 +920,8 @@ app.post("/api/auth/token", async (req: Request, res: Response) => {
   try {
     const token = await verifyChallengeAndIssueToken(transaction);
     res.json({ token });
-  } catch (error: any) {
-
+  } catch (_error: unknown) {
+    sendApiError(req, res, 401, "Authentication failed.", { code: "AUTH_ERROR" });
   }
 });
 
@@ -758,7 +945,7 @@ app.post(
       const estimate = await estimateCreateStreamFee(parsedBody.data);
       res.json({ data: estimate });
     } catch (error: any) {
-      console.error("Failed to estimate stream creation fee:", error);
+      logger.error({ err: error }, "failed to estimate stream creation fee");
       const normalizedError = normalizeUnknownApiError(
         error,
         "Failed to estimate network fee.",
@@ -798,7 +985,7 @@ app.post(
         },
       });
     } catch (error: any) {
-      console.error("Failed to create stream:", error);
+      logger.error({ err: error }, "failed to create stream");
       const normalizedError = normalizeUnknownApiError(
         error,
         "Failed to create stream.",
@@ -850,7 +1037,7 @@ app.post(
         },
       });
     } catch (error: any) {
-      console.error("Failed to cancel stream:", error);
+      logger.error({ err: error, streamId: parsedId.value }, "failed to cancel stream");
       const normalizedError = normalizeUnknownApiError(
         error,
         "Failed to cancel stream.",
@@ -1027,7 +1214,7 @@ app.post(
         history,
       });
     } catch (error: any) {
-      console.error("Failed to record claim:", error);
+      logger.error({ err: error }, "failed to record claim");
       const normalizedError = normalizeUnknownApiError(
         error,
         "Failed to process claim.",
@@ -1061,10 +1248,6 @@ app.patch(
       return;
     }
 
-    const user = (req as any).user;
-
-      return;
-    }
 
     const parsedBody = updateStreamStartAtSchema.safeParse(req.body);
     if (!parsedBody.success) {
@@ -1073,6 +1256,7 @@ app.patch(
     }
 
     try {
+      const updated = updateStreamStartAt(parsedId.value, parsedBody.data.startAt);
 
     }
   },
@@ -1167,7 +1351,7 @@ app.get("/api/open-issues", async (req: Request, res: Response) => {
     const data = await fetchOpenIssues();
     res.json({ data });
   } catch (error: any) {
-    console.error("Failed to fetch open issues from proxy:", error);
+    logger.error({ err: error }, "failed to fetch open issues from proxy");
     const normalizedError = normalizeUnknownApiError(
       error,
       "Failed to fetch open issues.",
@@ -1225,7 +1409,7 @@ app.get(
         limit,
       });
     } catch (error: any) {
-      console.error("Failed to fetch dead-letter webhooks:", error);
+      logger.error({ err: error }, "failed to fetch dead-letter webhooks");
       const normalizedError = normalizeUnknownApiError(
         error,
         "Failed to fetch dead-letter webhooks.",
@@ -1251,7 +1435,7 @@ app.get(
       const total = countDeadLetters();
       res.json({ total });
     } catch (error: any) {
-      console.error("Failed to count dead-letter webhooks:", error);
+      logger.error({ err: error }, "failed to count dead-letter webhooks");
       const normalizedError = normalizeUnknownApiError(
         error,
         "Failed to count dead-letter webhooks.",
@@ -1291,7 +1475,7 @@ app.post(
       }
       res.json({ success: true, message: "Webhook re-queued successfully" });
     } catch (error: any) {
-      console.error("Failed to re-queue dead-letter webhook:", error);
+      logger.error({ err: error, deadLetterId: id }, "failed to re-queue dead-letter webhook");
       const normalizedError = normalizeUnknownApiError(
         error,
         "Failed to re-queue dead-letter webhook.",
@@ -1322,18 +1506,19 @@ async function startServer() {
     startIndexer(config.indexerPollIntervalMs);
     startReconciliationJob(config.reconciliationIntervalMs);
   } else {
-    console.warn("CONTRACT_ID not set, event indexer will not start");
+    logger.warn("CONTRACT_ID not set, event indexer will not start");
   }
 
   app.listen(config.port, () => {
-    console.log(
-      `StellarStream API listening on http://localhost:${config.port}`,
-    );
+    logger.info({ port: config.port }, "StellarStream API listening");
   });
 }
 
 if (require.main === module) {
-  startServer().catch(console.error);
+  startServer().catch((err) => {
+    logger.error({ err }, "failed to start server");
+    process.exit(1);
+  });
 }
 
 app.delete("/api/streams/:id", adminAuth, (req: Request, res: Response) => {
@@ -1353,7 +1538,7 @@ app.delete("/api/streams/:id", adminAuth, (req: Request, res: Response) => {
 
     res.status(204).send();
   } catch (error: any) {
-    console.error("Failed to delete stream:", error);
+    logger.error({ err: error, streamId: parsedId.value }, "failed to delete stream");
     const normalizedError = normalizeUnknownApiError(
       error,
       "Failed to delete stream.",

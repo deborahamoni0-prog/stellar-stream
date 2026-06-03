@@ -11,30 +11,31 @@ declare global {
 }
 
 export function requestLogger(req: Request, res: Response, next: NextFunction) {
-  // ✅ STEP 1: Generate unique request ID for log correlation
   const requestId = crypto.randomUUID();
   req.requestId = requestId;
 
-  // ✅ STEP 2: Track request start time
   const start = Date.now();
 
-  // ✅ STEP 3: Log AFTER response is sent
   res.on("finish", () => {
-    const duration = Date.now() - start;
+    const durationMs = Date.now() - start;
 
-    // ✅ Required log data
     const logEntry = {
       requestId,
       method: req.method,
       route: req.originalUrl,
       statusCode: res.statusCode,
-      duration: `${duration}ms`,
+      durationMs,
     };
 
-    // ✅ STEP 4: Use structured logger with redaction
-    logger.info(logEntry, `${req.method} ${req.originalUrl} ${res.statusCode} - ${duration}ms | id=${requestId}`);
+    const message = "request completed";
+    if (res.statusCode >= 500) {
+      logger.error(logEntry, message);
+    } else if (res.statusCode >= 400) {
+      logger.warn(logEntry, message);
+    } else {
+      logger.info(logEntry, message);
+    }
   });
 
-  // ✅ STEP 5: Continue request
   next();
 }

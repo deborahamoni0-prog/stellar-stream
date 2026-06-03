@@ -17,6 +17,7 @@ import { recordEventWithDb } from "./eventHistory";
 import { streamHasEvent } from "./eventHistory";
 import { triggerWebhook } from "./webhook";
 import { initCache, getCache } from "./cache";
+import { logger } from "../logger";
 
 export type StreamStatus = "scheduled" | "active" | "paused" | "completed" | "canceled";
 
@@ -159,7 +160,7 @@ export async function initSoroban() {
   if (process.env.SERVER_PRIVATE_KEY) {
     serverKeypair = Keypair.fromSecret(process.env.SERVER_PRIVATE_KEY);
   } else {
-    console.warn(
+    logger.warn(
       "SERVER_PRIVATE_KEY missing. Creating streams on-chain will fail.",
     );
   }
@@ -216,10 +217,7 @@ async function retryWithBackoff<T>(
       }
 
       const delayMs = Math.pow(2, attempt - 1) * 1000;
-      console.log(
-        `[retry] attempt ${attempt} failed, retrying in ${delayMs}ms`,
-        err,
-      );
+      logger.info({ err, attempt, delayMs }, "retryable operation failed, retrying");
       await new Promise((r) => setTimeout(r, delayMs));
     }
   }
@@ -314,7 +312,7 @@ async function fetchNextOnChainStreamId(
   );
 
   if (!rpc.Api.isSimulationSuccess(simRes) || !simRes.result) {
-    console.warn("[reconciliation] failed to simulate get_next_stream_id", simRes);
+    logger.warn({ simulation: simRes }, "failed to simulate get_next_stream_id");
     return null;
   }
 
@@ -417,15 +415,9 @@ export function calculateProgress(
   stream: StreamRecord,
   at = nowInSeconds(),
 ): StreamProgress {
-
-  }
-
-  const streamEnd = stream.startAt + stream.durationSeconds;
-
   // When paused, vesting is frozen at the moment of pause.
   const effectiveAt =
     stream.pausedAt !== undefined ? Math.min(at, stream.pausedAt) : at;
-
 
 
   const ratio = Math.min(1, elapsed / stream.durationSeconds);
@@ -576,10 +568,7 @@ export async function syncStreams() {
         ),
       );
     } catch (err) {
-      console.warn(
-        "[syncStreams] parallel fetch failed, falling back to sequential",
-        err,
-      );
+      logger.warn({ err }, "parallel stream sync failed, falling back to sequential");
       parallelFailed = true;
     }
 
@@ -593,20 +582,15 @@ export async function syncStreams() {
           );
           if (stream) upsertStream(stream);
         } catch (e) {
-          console.error(
-            `[syncStreams] failed to fetch stream ${id} sequentially`,
-            e,
-          );
+          logger.error({ err: e, streamId: id }, "failed to fetch stream sequentially");
         }
       }
     }
 
     const elapsed = Date.now() - syncStart;
-    console.log(
-      `[syncStreams] completed in ${elapsed}ms (${ids.length} stream(s))`,
-    );
+    logger.info({ elapsedMs: elapsed, streamCount: ids.length }, "stream sync completed");
   } catch (err) {
-    console.error("Failed to sync streams", err);
+    logger.error({ err }, "failed to sync streams");
   }
 }
 
@@ -631,7 +615,7 @@ export async function reconcileMissingStreams(): Promise<number> {
     );
 
     if (nextId === null || nextId <= 1) {
-      console.log("[reconciliation] no on-chain streams available to reconcile");
+      logger.info("no on-chain streams available to reconcile");
       return 0;
     }
 
@@ -645,13 +629,11 @@ export async function reconcileMissingStreams(): Promise<number> {
     }
 
     if (missingIds.length === 0) {
-      console.log("[reconciliation] no missing local streams detected");
+      logger.info("no missing local streams detected");
       return 0;
     }
 
-    console.warn(
-      `[reconciliation] detected ${missingIds.length} missing local stream(s): ${missingIds.join(", ")}`,
-    );
+    logger.warn({ missingCount: missingIds.length, missingIds }, "missing local streams detected");
 
     let repairedCount = 0;
     for (const missingId of missingIds) {
@@ -663,9 +645,7 @@ export async function reconcileMissingStreams(): Promise<number> {
         );
 
         if (!stream) {
-          console.error(
-            `[reconciliation] missing stream ${missingId} could not be fetched from chain`,
-          );
+          logger.error({ streamId: missingId }, "missing stream could not be fetched from chain");
           continue;
         }
 
@@ -673,19 +653,14 @@ export async function reconcileMissingStreams(): Promise<number> {
         recordBackfilledCreatedEvent(stream);
         repairedCount += 1;
       } catch (err) {
-        console.error(
-          `[reconciliation] failed to backfill missing stream ${missingId}:`,
-          err,
-        );
+        logger.error({ err, streamId: missingId }, "failed to backfill missing stream");
       }
     }
 
-    console.log(
-      `[reconciliation] repaired ${repairedCount} missing local stream(s) out of ${missingIds.length}`,
-    );
+    logger.info({ repairedCount, missingCount: missingIds.length }, "missing local streams repaired");
     return repairedCount;
   } catch (err) {
-    console.error("[reconciliation] reconciliation failed:", err);
+    logger.error({ err }, "reconciliation failed");
     return 0;
   }
 }
@@ -915,10 +890,10 @@ export async function archiveOldStreams(): Promise<number> {
       }
     })();
 
-    console.log(`[archive] archived ${archived} completed stream(s)`);
+    logger.info({ archived }, "completed streams archived");
     return archived;
   } catch (err) {
-    console.error("[archive] failed to archive old streams:", err);
+    logger.error({ err }, "failed to archive old streams");
     return 0;
   }
 }
@@ -997,7 +972,6 @@ export async function cancelStream(
   // Attempt to get refund amount from on-chain cancel transaction.
   // For now, we extract from potential on-chain response. In production,
   // this would send an actual cancel_stream transaction to the contract.
-  let refundAmount: number | undefined = undefined;
   try {
     const sorobanContext = getSorobanContext();
     if (sorobanContext && rpcServer && serverKeypair) {
@@ -1035,17 +1009,13 @@ export async function cancelStream(
           }
 
           if (txResult?.status === "SUCCESS" && txResult.returnValue) {
-            refundAmount = Number(scValToNative(txResult.returnValue));
-            stream.refundedAmount = refundAmount;
+            stream.refundedAmount = Number(scValToNative(txResult.returnValue));
           }
         }
       }
     }
   } catch (err) {
-    console.warn(
-      `[cancel] failed to get refund amount from chain for stream ${id}:`,
-      err,
-    );
+    logger.warn({ err, streamId: id }, "failed to get refund amount from chain");
   }
 
   // Invalidate cache
@@ -1140,4 +1110,3 @@ export function deleteStreamById(id: string): boolean {
 
   return true;
 }
-

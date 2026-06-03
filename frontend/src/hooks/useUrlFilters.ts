@@ -21,6 +21,11 @@ function parseStatus(raw: string | null): string {
     return VALID_STATUSES.has(v) ? v : "";
 }
 
+function parsePage(raw: string | null): number | undefined {
+    const n = raw ? parseInt(raw, 10) : NaN;
+    return !isNaN(n) && n >= 1 ? n : undefined;
+}
+
 function readParams(): { view: ViewMode; filters: ListStreamsFilters; streamId: string | null } {
     const p = new URLSearchParams(window.location.search);
     const rawStreamId = sanitizeString(p.get("streamId"), 128);
@@ -32,6 +37,8 @@ function readParams(): { view: ViewMode; filters: ListStreamsFilters; streamId: 
             asset: sanitizeString(p.get("asset")),
             sender: sanitizeString(p.get("sender")),
             recipient: sanitizeString(p.get("recipient")),
+            sort: sanitizeString(p.get("sort")),
+            page: parsePage(p.get("page")),
         },
     };
 }
@@ -43,6 +50,8 @@ function buildSearch(view: ViewMode, filters: ListStreamsFilters, streamId: stri
     if (filters.asset) p.set("asset", filters.asset);
     if (filters.sender) p.set("sender", filters.sender);
     if (filters.recipient) p.set("recipient", filters.recipient);
+    if (filters.sort) p.set("sort", filters.sort);
+    if (filters.page && filters.page > 1) p.set("page", String(filters.page));
     if (streamId) p.set("streamId", streamId);
     const s = p.toString();
     return s ? `?${s}` : "";

@@ -14,7 +14,7 @@ const serverKeypair = Keypair.random();
 vi.stubEnv("SERVER_SIGNING_KEY", serverKeypair.secret());
 
 // Import after env stubs are in place
-// @ts-ignore: Top-level await is supported by Vitest
+// @ts-expect-error: Top-level await is supported by Vitest
 const { verifyChallengeAndIssueToken, authMiddleware, generateChallenge } = await import("./auth");
 
 function signChallenge(challengeXdr: string, ...signers: Keypair[]): string {

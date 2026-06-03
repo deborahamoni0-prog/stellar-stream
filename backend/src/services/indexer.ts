@@ -14,6 +14,7 @@ import {
   indexerErrorsTotal,
   indexerCircuitState,
 } from "./metrics";
+import { logger } from "../logger";
 
 let rpcServer: rpc.Server | null = null;
 let contractId: string | null = null;
@@ -51,7 +52,7 @@ export class CircuitBreaker {
 
   public onSuccess(): void {
     if (this.state !== CircuitState.CLOSED) {
-      console.log(`[Circuit Breaker] Probe successful. Resetting to CLOSED state.`);
+      logger.info("circuit breaker probe succeeded");
       this.setState(CircuitState.CLOSED);
     }
     this.failureCount = 0;
@@ -62,17 +63,17 @@ export class CircuitBreaker {
     this.lastFailureTime = Date.now();
     
     if (this.state === CircuitState.CLOSED && this.failureCount >= this.failureThreshold) {
-      console.log(`[Circuit Breaker] ${this.failureThreshold} consecutive failures reached. Opening circuit.`);
+      logger.warn({ failureThreshold: this.failureThreshold }, "circuit breaker failure threshold reached");
       this.setState(CircuitState.OPEN);
     } else if (this.state === CircuitState.HALF_OPEN) {
-      console.log(`[Circuit Breaker] Probe failed in HALF_OPEN state. Re-opening circuit.`);
+      logger.warn("circuit breaker probe failed");
       this.setState(CircuitState.OPEN);
     }
   }
 
   private setState(newState: CircuitState): void {
     if (this.state !== newState) {
-      console.log(`[Circuit Breaker] State Transition: ${this.state} -> ${newState}`);
+      logger.info({ from: this.state, to: newState }, "circuit breaker state changed");
       this.state = newState;
     }
     // Keep gauge in sync whenever state is evaluated
@@ -109,10 +110,10 @@ export function initIndexer(
     if (!isNaN(startLedger)) {
       indexerStartLedger = startLedger;
       if (startLedger !== 0) {
-        console.warn(`INDEXER_START_LEDGER override active: starting from ledger ${startLedger}`);
+        logger.warn({ startLedger }, "INDEXER_START_LEDGER override active");
       }
     } else {
-      console.error('Invalid INDEXER_START_LEDGER value, must be a number');
+      logger.error({ value: startLedgerEnv }, "invalid INDEXER_START_LEDGER value");
     }
   }
 }
@@ -122,16 +123,16 @@ export function startIndexer(intervalMs = 10000): void {
     return;
   }
 
-  console.log(`Starting event indexer with ${intervalMs}ms interval`);
+  logger.info({ intervalMs }, "event indexer started");
   indexerInterval = setInterval(() => {
     indexEvents().catch((err) => {
-      console.error("Indexer error:", err);
+      logger.error({ err }, "indexer error");
     });
   }, intervalMs);
 
   // Run immediately on start
   indexEvents().catch((err) => {
-    console.error("Initial indexer error:", err);
+    logger.error({ err }, "initial indexer error");
   });
 }
 
@@ -139,7 +140,7 @@ export function stopIndexer(): void {
   if (indexerInterval) {
     clearInterval(indexerInterval);
     indexerInterval = null;
-    console.log("Event indexer stopped");
+    logger.info("event indexer stopped");
   }
 }
 
@@ -194,7 +195,7 @@ async function indexEvents(): Promise<void> {
   } catch (err) {
     circuitBreaker.onFailure();
     indexerErrorsTotal.inc();
-    console.error("Failed to index events:", err);
+    logger.error({ err }, "failed to index events");
   }
 }
 
@@ -259,6 +260,6 @@ function processEvent(db: any, event: rpc.Api.EventResponse): void {
         break;
     }
   } catch (err) {
-    console.error("Failed to process event:", err);
+    logger.error({ err }, "failed to process event");
   }
 }

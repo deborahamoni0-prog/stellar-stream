@@ -53,8 +53,8 @@ export function StreamMetricsChart({ data }: StreamMetricsChartProps) {
       const newLength = Math.max(1, Math.round(length / factor));
       const center = range[0] + length / 2;
       
-      let newStart = Math.round(center - newLength / 2);
-      let newEnd = Math.round(center + newLength / 2);
+      const newStart = Math.round(center - newLength / 2);
+      const newEnd = Math.round(center + newLength / 2);
       
       return [Math.max(0, newStart), Math.min(maxIndex, newEnd)];
     });
@@ -134,8 +134,8 @@ export function StreamMetricsChart({ data }: StreamMetricsChartProps) {
       const newLength = Math.max(1, Math.round(length / factor));
       const center = startRange[0] + length / 2;
       
-      let newStart = Math.round(center - newLength / 2);
-      let newEnd = Math.round(center + newLength / 2);
+      const newStart = Math.round(center - newLength / 2);
+      const newEnd = Math.round(center + newLength / 2);
       
       setZoomRange([Math.max(0, newStart), Math.min(maxIndex, newEnd)]);
     }

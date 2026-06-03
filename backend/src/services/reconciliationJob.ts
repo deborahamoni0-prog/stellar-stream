@@ -1,13 +1,12 @@
 import { reconcileMissingStreams } from "./streamStore";
+import { logger } from "../logger";
 
 let reconciliationInterval: NodeJS.Timeout | null = null;
 let reconciliationInFlight = false;
 
 async function runReconciliationCycle(): Promise<void> {
   if (reconciliationInFlight) {
-    console.warn(
-      "[reconciliation] skipping cycle because a previous run is still in progress",
-    );
+    logger.warn("skipping reconciliation cycle because a previous run is still in progress");
     return;
   }
 
@@ -24,18 +23,16 @@ export function startReconciliationJob(intervalMs = 60000): void {
     return;
   }
 
-  console.log(
-    `[reconciliation] starting reconciliation job with ${intervalMs}ms interval`,
-  );
+  logger.info({ intervalMs }, "reconciliation job started");
 
   reconciliationInterval = setInterval(() => {
     runReconciliationCycle().catch((err) => {
-      console.error("[reconciliation] job cycle failed:", err);
+      logger.error({ err }, "reconciliation job cycle failed");
     });
   }, intervalMs);
 
   runReconciliationCycle().catch((err) => {
-    console.error("[reconciliation] initial reconciliation failed:", err);
+    logger.error({ err }, "initial reconciliation failed");
   });
 }
 
@@ -46,5 +43,5 @@ export function stopReconciliationJob(): void {
 
   clearInterval(reconciliationInterval);
   reconciliationInterval = null;
-  console.log("[reconciliation] reconciliation job stopped");
+  logger.info("reconciliation job stopped");
 }
