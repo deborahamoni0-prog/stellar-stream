@@ -34,7 +34,7 @@ import { OpenIssue, Stream } from "./types/stream";
 function App() {
   const wallet = useFreighter();
   const { showToast } = useToast();
-  const { view: viewMode, filters: urlFilters, setView: setViewMode } = useUrlFilters();
+  const { view: viewMode, filters: urlFilters, setFilters: setUrlFilters, setView: setViewMode } = useUrlFilters();
   const { theme, toggleTheme } = useTheme();
   const [detailStreamId, setDetailStreamId] = useState<string | null>(null);
   const [streams, setStreams] = useState<Stream[]>([]);
@@ -370,6 +370,7 @@ function App() {
                 setFilter("recipient", next.recipient ?? defaultStreamFilters.recipient);
                 setFilter("assetCode", next.asset ?? defaultStreamFilters.assetCode);
               }}
+              setUrlFilters={setUrlFilters}
               onCancel={handleCancel}
               onPause={handlePause}
               onResume={handleResume}

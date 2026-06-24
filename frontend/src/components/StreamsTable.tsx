@@ -40,6 +40,7 @@ interface StreamsTableProps {
   hasMore?: boolean;
   loadingMore?: boolean;
   onRefreshStreams?: () => void;
+  setUrlFilters?: (filters: ListStreamsFilters) => void;
 }
 
 const SKELETON_ROW_COUNT = 6;
@@ -104,6 +105,7 @@ export function StreamsTable({
   hasMore = true,
   loadingMore = false,
   onRefreshStreams,
+  setUrlFilters,
 }: StreamsTableProps) {
   const { visibility, toggleColumn, isVisible } = useStreamTableColumns();
   const [columnsOpen, setColumnsOpen] = useState(false);
@@ -129,6 +131,18 @@ export function StreamsTable({
   });
 
   const isWebSocketConnected = readyState === 1; // WebSocket.OPEN
+  const hasWebSocketUrl = wsUrl.length > 0;
+
+  // Poll for updates when WebSocket is disconnected and URL is configured
+  useEffect(() => {
+    if (isWebSocketConnected || !hasWebSocketUrl || !onRefreshStreams) {
+      return;
+    }
+    const interval = setInterval(() => {
+      onRefreshStreams();
+    }, 5000); // Poll every 5 seconds when disconnected
+    return () => clearInterval(interval);
+  }, [isWebSocketConnected, hasWebSocketUrl, onRefreshStreams]);
 
   useEffect(() => {
     const sentinel = sentinelRef.current;
@@ -365,25 +379,30 @@ export function StreamsTable({
 
   return (
     <>
-      {!isWebSocketConnected && (
-        <div className="ws-disconnected-banner" style={{
-          background: "#fef3c7",
-          border: "1px solid #fcd34d",
-          borderRadius: "8px",
-          padding: "0.5rem 0.75rem",
-          marginBottom: "1rem",
-          fontSize: "0.85rem",
-          color: "#92400e",
-          display: "flex",
+      {!isWebSocketConnected && hasWebSocketUrl && (
+        <div 
+          className="ws-disconnected-banner" 
+          role="status"
+          aria-live="polite"
+          style={{
+            background: "var(--bg-muted)",
+            border: "1px solid var(--border)",
+            borderRadius: "8px",
+            padding: "0.5rem 0.75rem",
+            marginBottom: "1rem",
+            fontSize: "0.85rem",
+            color: "var(--color-text)",
+            display: "flex",
           alignItems: "center",
           gap: "0.5rem",
-        }}>
+        }}
+        >
           <span>⚠️</span>
           <span>Live updates paused - using polling for progress updates</span>
         </div>
       )}
       <div className="card">
-        <FilterBar filters={filters} onChange={onFiltersChange} />
+        <FilterBar filters={filters} onChange={onFiltersChange} setUrlFilters={setUrlFilters} />
         <div
           className="streams-table-toolbar"
           style={{

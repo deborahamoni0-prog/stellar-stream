@@ -83,21 +83,23 @@ describe("Backend Integration Tests", () => {
       expect(response.headers["content-security-policy"]).toContain("default-src 'none'");
     });
 
-    it("should have X-Frame-Options header", async () => {
+    it("should have X-Frame-Options header set to SAMEORIGIN", async () => {
       const response = await request(app).get("/api/health");
 
       expect(response.status).toBe(200);
-      expect(response.headers["x-frame-options"]).toBeDefined();
+      expect(response.headers["x-frame-options"]).toBe("SAMEORIGIN");
     });
 
-    it("should have Strict-Transport-Security header", async () => {
+    it("should have Strict-Transport-Security header with max-age and includeSubDomains", async () => {
       const response = await request(app).get("/api/health");
 
       expect(response.status).toBe(200);
-      expect(response.headers["strict-transport-security"]).toBeDefined();
+      expect(response.headers["strict-transport-security"]).toContain("max-age=31536000");
+      expect(response.headers["strict-transport-security"]).toContain("includeSubDomains");
+      expect(response.headers["strict-transport-security"]).toContain("preload");
     });
 
-    it("should have X-Content-Type-Options header", async () => {
+    it("should have X-Content-Type-Options header set to nosniff", async () => {
       const response = await request(app).get("/api/health");
 
       expect(response.status).toBe(200);

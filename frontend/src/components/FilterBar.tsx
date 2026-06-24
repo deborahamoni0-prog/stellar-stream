@@ -1,11 +1,10 @@
 import React from "react";
 import { ListStreamsFilters } from "../services/api";
-import { useUrlFilters } from "../hooks/useUrlFilters";
 
 interface FilterBarProps {
   filters: ListStreamsFilters;
   onChange: (filters: ListStreamsFilters) => void;
-  useUrlFilters?: boolean;
+  setUrlFilters?: (filters: ListStreamsFilters) => void;
 }
 
 const STATUS_OPTIONS = [
@@ -17,14 +16,13 @@ const STATUS_OPTIONS = [
   { label: "Canceled", value: "canceled" },
 ];
 
-export function FilterBar({ filters, onChange, useUrlFilters: enableUrlFilters = false }: FilterBarProps) {
-  const { setFilters: setUrlFilters } = useUrlFilters();
+export function FilterBar({ filters, onChange, setUrlFilters }: FilterBarProps) {
 
   const handleTextChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target;
     const newFilters = { ...filters, [name]: value };
     onChange(newFilters);
-    if (enableUrlFilters) {
+    if (setUrlFilters) {
       setUrlFilters({ ...newFilters, page: 1 });
     }
   };
@@ -32,7 +30,7 @@ export function FilterBar({ filters, onChange, useUrlFilters: enableUrlFilters =
   const handleStatusChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const newFilters = { ...filters, status: e.target.value };
     onChange(newFilters);
-    if (enableUrlFilters) {
+    if (setUrlFilters) {
       setUrlFilters({ ...newFilters, page: 1 });
     }
   };
@@ -48,7 +46,7 @@ export function FilterBar({ filters, onChange, useUrlFilters: enableUrlFilters =
       ...preset,
     };
     onChange(newFilters);
-    if (enableUrlFilters) {
+    if (setUrlFilters) {
       setUrlFilters({ ...newFilters, page: 1 });
     }
   };
@@ -62,7 +60,7 @@ export function FilterBar({ filters, onChange, useUrlFilters: enableUrlFilters =
       recipient: "",
     };
     onChange(newFilters);
-    if (enableUrlFilters) {
+    if (setUrlFilters) {
       setUrlFilters({ ...newFilters, page: 1 });
     }
   };
