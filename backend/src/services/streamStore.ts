@@ -17,6 +17,7 @@ import { recordEventWithDb } from "./eventHistory";
 import { streamHasEvent } from "./eventHistory";
 import { triggerWebhook } from "./webhook";
 import { initCache, getCache } from "./cache";
+import { resetStatsCache } from "./stats";
 import { logger } from "../logger";
 
 export type StreamStatus = "scheduled" | "active" | "paused" | "completed" | "canceled";
@@ -419,6 +420,13 @@ export function calculateProgress(
   const effectiveAt =
     stream.pausedAt !== undefined ? Math.min(at, stream.pausedAt) : at;
 
+  const elapsed = Math.max(
+    0,
+    Math.min(
+      effectiveAt - stream.startAt - stream.pausedDuration,
+      stream.durationSeconds,
+    ),
+  );
 
   const ratio = Math.min(1, elapsed / stream.durationSeconds);
   const vestedAmount = stream.totalAmount * ratio;
@@ -461,7 +469,7 @@ export async function getOnChainClaimableAmount(
   return { claimableAmount, at };
 }
 
-const MAX_CLAIMABLE_BATCH_SIZE = 20;
+const MAX_CLAIMABLE_BATCH_SIZE = 50;
 
 function parseClaimableBatchMap(native: unknown): Record<string, number> {
   const result: Record<string, number> = {};
@@ -479,15 +487,42 @@ function parseClaimableBatchMap(native: unknown): Record<string, number> {
   return result;
 }
 
+async function getOnChainClaimableBatchChunk(
+  ids: string[],
+  at: number,
+  contract: Contract,
+  sourceAccount: Account,
+): Promise<{ amounts: Record<string, number> }> {
+  if (ids.length === 0) {
+    return { amounts: {} };
+  }
+
+  const streamIdVec = xdr.ScVal.scvVec(
+    ids.map((id) => nativeToScVal(parseInt(id, 10), { type: "u64" })),
+  );
+
+  const simRes = await simulateContractCall(
+    contract,
+    sourceAccount,
+    "get_claimable_batch",
+    streamIdVec,
+    nativeToScVal(at, { type: "u64" }),
+  );
+
+  if (!rpc.Api.isSimulationSuccess(simRes) || !simRes.result) {
+    throw new Error("Simulation failed: " + JSON.stringify(simRes));
+  }
+
+  const amounts = parseClaimableBatchMap(scValToNative(simRes.result.retval));
+  return { amounts };
+}
+
 export async function getOnChainClaimableBatch(
   ids: string[],
 ): Promise<{ amounts: Record<string, number>; at: number }> {
   if (ids.length === 0) {
     const at = await getLatestLedgerTime();
     return { amounts: {}, at };
-  }
-  if (ids.length > MAX_CLAIMABLE_BATCH_SIZE) {
-    throw new Error(`Too many stream IDs (max ${MAX_CLAIMABLE_BATCH_SIZE})`);
   }
 
   const sorobanContext = getSorobanContext();
@@ -501,24 +536,29 @@ export async function getOnChainClaimableBatch(
     ? parseInt(latestLedger.closeTime, 10)
     : Math.floor(Date.now() / 1000);
 
-  const streamIdVec = xdr.ScVal.scvVec(
-    ids.map((id) => nativeToScVal(parseInt(id, 10), { type: "u64" })),
-  );
-
-  const simRes = await simulateContractCall(
-    sorobanContext.contract,
-    sourceAccount,
-    "get_claimable_batch",
-    streamIdVec,
-    nativeToScVal(at, { type: "u64" }),
-  );
-
-  if (!rpc.Api.isSimulationSuccess(simRes) || !simRes.result) {
-    throw new Error("Simulation failed: " + JSON.stringify(simRes));
+  // Split into chunks of MAX_CLAIMABLE_BATCH_SIZE
+  const chunks: string[][] = [];
+  for (let i = 0; i < ids.length; i += MAX_CLAIMABLE_BATCH_SIZE) {
+    chunks.push(ids.slice(i, i + MAX_CLAIMABLE_BATCH_SIZE));
   }
 
-  const amounts = parseClaimableBatchMap(scValToNative(simRes.result.retval));
-  return { amounts, at };
+  const allAmounts: Record<string, number> = {};
+  const limit = pLimit(5);
+  await Promise.all(
+    chunks.map((chunk) =>
+      limit(async () => {
+        const { amounts } = await getOnChainClaimableBatchChunk(
+          chunk,
+          at,
+          sorobanContext.contract,
+          sourceAccount,
+        );
+        Object.assign(allAmounts, amounts);
+      }),
+    ),
+  );
+
+  return { amounts: allAmounts, at };
 }
 
 export async function getLatestLedgerTime(): Promise<number> {
@@ -754,6 +794,9 @@ export async function createStream(input: StreamInput): Promise<StreamRecord> {
 
   // Invalidate cache to ensure freshness after stream creation
   await invalidateCache("stream:");
+  await invalidateCache("streams:list:");
+  await invalidateCache("streams:export:");
+  resetStatsCache();
 
   // Webhook fires after the transaction commits — a webhook failure
   // must never roll back an already-persisted stream.
@@ -1020,6 +1063,9 @@ export async function cancelStream(
 
   // Invalidate cache
   await invalidateCache(`stream:${id}`);
+  await invalidateCache("streams:list:");
+  await invalidateCache("streams:export:");
+  resetStatsCache();
 
   // Atomically write the updated stream row and the cancellation event.
   const db = getDb();
@@ -1043,9 +1089,80 @@ export async function cancelStream(
  * @returns {StreamRecord} The updated stream record
  * @throws {Error} If stream not found or not in scheduled state
  */
-export function updateStreamStartAt(id: string,
+export async function pauseStream(id: string): Promise<StreamRecord> {
+  const stream = getStream(id);
+  if (!stream) {
+    const err: any = new Error("Stream not found.");
+    err.statusCode = 404;
+    throw err;
+  }
+
+  const status = computeStatus(stream, nowInSeconds());
+  if (status !== "active") {
+    const err: any = new Error("Only active streams can be paused.");
+    err.statusCode = 400;
+    throw err;
+  }
+
+  stream.pausedAt = nowInSeconds();
+  const db = getDb();
+  db.transaction(() => {
+    upsertStream(stream);
+    recordEventWithDb(db, stream.id, "paused", stream.pausedAt!, stream.sender);
+  })();
+
+  // Invalidate cache
+  await invalidateCache(`stream:${id}`);
+  await invalidateCache("streams:list:");
+  await invalidateCache("streams:export:");
+  resetStatsCache();
+
+  triggerWebhook("paused", stream);
+  return stream;
+}
+
+export async function resumeStream(id: string): Promise<StreamRecord> {
+  const stream = getStream(id);
+  if (!stream) {
+    const err: any = new Error("Stream not found.");
+    err.statusCode = 404;
+    throw err;
+  }
+
+  if (stream.pausedAt === undefined) {
+    const err: any = new Error("Stream is not paused.");
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const now = nowInSeconds();
+  const elapsed = now - stream.pausedAt;
+  stream.pausedDuration = (stream.pausedDuration ?? 0) + elapsed;
+  // Extend the effective duration so the recipient doesn't lose vesting time.  
+  stream.durationSeconds += elapsed;
+  stream.pausedAt = undefined;
+
+  const db = getDb();
+  db.transaction(() => {
+    upsertStream(stream);
+    recordEventWithDb(db, stream.id, "resumed", now, stream.sender, undefined, {
+      pausedDuration: stream.pausedDuration,
+    });
+  })();
+
+  // Invalidate cache
+  await invalidateCache(`stream:${id}`);
+  await invalidateCache("streams:list:");
+  await invalidateCache("streams:export:");
+  resetStatsCache();
+
+  triggerWebhook("resumed", stream);
+  return stream;
+}
+
+export async function updateStreamStartAt(id: string,
   newStartAt: number,
-): StreamRecord {
+): Promise<StreamRecord> {
   const stream = getStream(id);
   if (!stream) {
     const err: any = new Error("Stream not found.");
@@ -1081,6 +1198,12 @@ export function updateStreamStartAt(id: string,
       { oldStartAt, newStartAt },
     );
   })();
+
+  // Invalidate cache
+  await invalidateCache(`stream:${id}`);
+  await invalidateCache("streams:list:");
+  await invalidateCache("streams:export:");
+  resetStatsCache();
 
   return stream;
 }

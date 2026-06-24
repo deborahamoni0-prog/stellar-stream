@@ -251,6 +251,61 @@ export const swaggerDocument = {
           },
         },
       },
+      GlobalStats: {
+        type: "object",
+        properties: {
+          total: {
+            type: "integer",
+            description: "Total number of streams.",
+            example: 42,
+          },
+          active: {
+            type: "integer",
+            description: "Streams currently streaming (started, not paused, not yet ended or canceled).",
+            example: 10,
+          },
+          scheduled: {
+            type: "integer",
+            description: "Streams that are scheduled but haven't started yet.",
+            example: 5,
+          },
+          paused: {
+            type: "integer",
+            description: "Streams that are currently paused.",
+            example: 3,
+          },
+          completed: {
+            type: "integer",
+            description: "Streams that have fully completed.",
+            example: 20,
+          },
+          canceled: {
+            type: "integer",
+            description: "Streams that were canceled.",
+            example: 4,
+          },
+          totalVested: {
+            type: "number",
+            description: "Total tokens vested across all active and completed streams.",
+            example: 98432.5,
+          },
+          totalAmount: {
+            type: "number",
+            description: "Total amount of tokens committed across all streams.",
+            example: 150000,
+          },
+          uniqueSenders: {
+            type: "integer",
+            description: "Number of distinct sender accounts.",
+            example: 18,
+          },
+          uniqueRecipients: {
+            type: "integer",
+            description: "Number of distinct recipient accounts.",
+            example: 31,
+          },
+        },
+      },
       Error: {
         type: "object",
         required: ["error", "statusCode"],
@@ -406,49 +461,7 @@ export const swaggerDocument = {
                   type: "object",
                   properties: {
                     data: {
-                      type: "object",
-                      properties: {
-                        total_streams: {
-                          type: "integer",
-                          description: "Total number of streams.",
-                          example: 42,
-                        },
-                        active_streams: {
-                          type: "integer",
-                          description: "Streams currently streaming (started, not yet ended or canceled).",
-                          example: 10,
-                        },
-                        completed_streams: {
-                          type: "integer",
-                          description: "Streams that have fully completed.",
-                          example: 25,
-                        },
-                        canceled_streams: {
-                          type: "integer",
-                          description: "Streams that were canceled.",
-                          example: 7,
-                        },
-                        total_vested: {
-                          type: "number",
-                          description: "Total tokens vested across all active and completed streams.",
-                          example: 98432.5,
-                        },
-                        avg_duration_seconds: {
-                          type: "integer",
-                          description: "Average stream duration in seconds.",
-                          example: 3600,
-                        },
-                        unique_senders: {
-                          type: "integer",
-                          description: "Number of distinct sender accounts.",
-                          example: 18,
-                        },
-                        unique_recipients: {
-                          type: "integer",
-                          description: "Number of distinct recipient accounts.",
-                          example: 31,
-                        },
-                      },
+                      $ref: "#/components/schemas/GlobalStats",
                     },
                   },
                 },
