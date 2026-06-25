@@ -5,6 +5,24 @@
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>StellarStream - Real-Time Payment Streaming</title>
+    <!--
+      Anti-FOUC: apply dark class before first paint.
+      Reads localStorage preference, falls back to prefers-color-scheme.
+    -->
+    <script>
+      (function () {
+        try {
+          var stored = localStorage.getItem('stellar-stream-theme');
+          if (stored === 'dark' || stored === 'light') {
+            if (stored === 'dark') document.documentElement.classList.add('dark');
+            return;
+          }
+        } catch (_) {}
+        if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+          document.documentElement.classList.add('dark');
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

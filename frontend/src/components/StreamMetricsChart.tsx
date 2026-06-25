@@ -14,14 +14,19 @@ import { MetricsSnapshot } from "../hooks/useMetricsHistory";
 
 interface StreamMetricsChartProps {
   data: MetricsSnapshot[];
+  loading?: boolean;
+  error?: Error | null;
 }
 
-function formatTime(timestamp: number): string {
-  const date = new Date(timestamp);
-  return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+/** Format a unix-ms timestamp as a short date label (e.g. "Jun 24"). */
+function formatDate(timestamp: number): string {
+  return new Date(timestamp).toLocaleDateString([], {
+    month: "short",
+    day: "numeric",
+  });
 }
 
-export function StreamMetricsChart({ data }: StreamMetricsChartProps) {
+export function StreamMetricsChart({ data, loading = false, error = null }: StreamMetricsChartProps) {
   const [zoomRange, setZoomRange] = useState<[number, number] | null>(null);
   const [interactionMode, setInteractionMode] = useState<"pan" | "zoom">("pan");
   const [refAreaLeft, setRefAreaLeft] = useState<string | null>(null);
@@ -38,10 +43,10 @@ export function StreamMetricsChart({ data }: StreamMetricsChartProps) {
     return data.slice(Math.max(0, currentRange[0]), Math.min(data.length, currentRange[1] + 1));
   }, [data, currentRange]);
 
-  const visibleMinutes = useMemo(() => {
-    if (currentData.length < 2) return 1;
-    const diffMs = currentData[currentData.length - 1].timestamp - currentData[0].timestamp;
-    return Math.max(1, Math.round(diffMs / 60000));
+  const visibleDateRange = useMemo(() => {
+    if (currentData.length === 0) return "";
+    if (currentData.length === 1) return formatDate(currentData[0].timestamp);
+    return `${formatDate(currentData[0].timestamp)} – ${formatDate(currentData[currentData.length - 1].timestamp)}`;
   }, [currentData]);
 
   const zoomInOut = useCallback((factor: number) => {
@@ -145,6 +150,30 @@ export function StreamMetricsChart({ data }: StreamMetricsChartProps) {
     pinchRef.current = null;
   };
 
+  if (loading) {
+    return (
+      <div className="chart-empty-state" aria-live="polite" aria-busy="true">
+        <div className="chart-empty-state__content">
+          <span className="chart-empty-state__icon">⏳</span>
+          <h3>Loading Chart Data</h3>
+          <p>Fetching metrics history…</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="chart-empty-state" role="alert">
+        <div className="chart-empty-state__content">
+          <span className="chart-empty-state__icon">⚠️</span>
+          <h3>Failed to Load Chart</h3>
+          <p>{error.message || "An error occurred while fetching metrics history."}</p>
+        </div>
+      </div>
+    );
+  }
+
   if (data.length === 0) {
     return (
       <div className="chart-empty-state">
@@ -158,7 +187,7 @@ export function StreamMetricsChart({ data }: StreamMetricsChartProps) {
   }
 
   const chartData = currentData.map((snapshot) => ({
-    time: formatTime(snapshot.timestamp),
+    date: formatDate(snapshot.timestamp),
     Active: snapshot.active,
     Completed: snapshot.completed,
     "Vested Amount": snapshot.vested,
@@ -176,7 +205,7 @@ export function StreamMetricsChart({ data }: StreamMetricsChartProps) {
         }}
       >
         <div style={{ color: "#9ca3af", fontSize: "0.875rem" }}>
-          Showing last {visibleMinutes} minutes
+          {visibleDateRange ? `Showing ${visibleDateRange}` : "Vested amount over time"}
         </div>
         <div style={{ display: "flex", gap: "0.5rem" }}>
           <button
@@ -266,8 +295,8 @@ export function StreamMetricsChart({ data }: StreamMetricsChartProps) {
           }}
           onMouseUp={() => {
             if (interactionMode === "zoom" && refAreaLeft && refAreaRight) {
-              const startIndex = currentData.findIndex(d => formatTime(d.timestamp) === refAreaLeft);
-              const endIndex = currentData.findIndex(d => formatTime(d.timestamp) === refAreaRight);
+              const startIndex = currentData.findIndex(d => formatDate(d.timestamp) === refAreaLeft);
+              const endIndex = currentData.findIndex(d => formatDate(d.timestamp) === refAreaRight);
               if (startIndex !== -1 && endIndex !== -1) {
                 const start = Math.min(startIndex, endIndex);
                 const end = Math.max(startIndex, endIndex);
@@ -301,7 +330,7 @@ export function StreamMetricsChart({ data }: StreamMetricsChartProps) {
           </defs>
           <CartesianGrid strokeDasharray="3 3" stroke="#374151" opacity={0.3} />
           <XAxis
-            dataKey="time"
+            dataKey="date"
             stroke="#9ca3af"
             tick={{ fill: "#9ca3af", fontSize: 12 }}
             tickLine={{ stroke: "#4b5563" }}

@@ -1,5 +1,6 @@
 ﻿import { useEffect, useMemo, useState, useCallback, type RefObject } from "react";
 import { CreateStreamForm } from "./components/CreateStreamForm";
+import { DarkModeToggle } from "./components/DarkModeToggle";
 import { EditStartTimeModal } from "./components/EditStartTimeModal";
 import { IssueBacklog } from "./components/IssueBacklog";
 import { OfflineBanner } from "./components/OfflineBanner";
@@ -13,6 +14,7 @@ import { WalletButton } from "./components/WalletButton";
 import { useFreighter } from "./hooks/useFreighter";
 import { useMetricsHistory } from "./hooks/useMetricsHistory";
 import { defaultStreamFilters, useStreamFilter } from "./hooks/useStreamFilter";
+import { useTheme } from "./hooks/useTheme";
 import { useToast } from "./hooks/useToast";
 import { useWebSocket } from "./hooks/useWebSocket";
 import { useUrlFilters } from "./hooks/useUrlFilters";
@@ -33,6 +35,7 @@ function App() {
   const wallet = useFreighter();
   const { showToast } = useToast();
   const { view: viewMode, filters: urlFilters, setView: setViewMode } = useUrlFilters();
+  const { theme, toggleTheme } = useTheme();
   const [detailStreamId, setDetailStreamId] = useState<string | null>(null);
   const [streams, setStreams] = useState<Stream[]>([]);
   const [issues, setIssues] = useState<OpenIssue[]>([]);
@@ -44,20 +47,11 @@ function App() {
   const [loadingDashboard, setLoadingDashboard] = useState(true);
   const [initialLoading, setInitialLoading] = useState(true);
   const [totalUnfilteredCount, setTotalUnfilteredCount] = useState<number>(0);
-  const [theme, setTheme] = useState<"light" | "dark">("light");
   const CREATE_STREAM_SECTION_ID = "create-stream-section";
 
   const scrollToCreateStream = useCallback(() => {
     document.getElementById(CREATE_STREAM_SECTION_ID)?.scrollIntoView({ behavior: "smooth" });
   }, []);
-
-  const toggleTheme = useCallback(() => {
-    setTheme((current) => (current === "light" ? "dark" : "light"));
-  }, []);
-
-  useEffect(() => {
-    document.documentElement.dataset.theme = theme;
-  }, [theme]);
 
   const { filters, filteredStreams, setFilter } = useStreamFilter(streams);
   const [hasMore, setHasMore] = useState(true);
@@ -71,7 +65,7 @@ function App() {
     streamId?: string;
   }>(wsUrl);
 
-  const { data: metricsHistory } = useMetricsHistory("7d");
+  const metricsHistory = useMetricsHistory("7d");
 
   const metrics = useMemo(
     () => {
@@ -282,15 +276,7 @@ function App() {
             <h1>StellarStream</h1>
           </div>
 
-          <button
-            type="button"
-            className="btn-ghost"
-            onClick={toggleTheme}
-            style={{ marginRight: "0.5rem", fontSize: "1.2rem", minHeight: "36px", display: "flex", alignItems: "center" }}
-            aria-label="Toggle Dark Mode"
-          >
-            {theme === "light" ? "🌙" : "☀️"}
-          </button>
+          <DarkModeToggle theme={theme} onToggle={toggleTheme} />
 
           <WalletButton wallet={wallet} />
         </div>
@@ -358,7 +344,11 @@ function App() {
 
           <section className="chart-section">
             <h2 className="chart-section__title">Stream Metrics Trends</h2>
-            <StreamMetricsChart data={metricsHistory} />
+            <StreamMetricsChart
+              data={metricsHistory.data}
+              loading={metricsHistory.loading}
+              error={metricsHistory.error}
+            />
           </section>
 
           <section className="layout-grid">
@@ -414,6 +404,10 @@ function App() {
               streamId={detailStreamId}
               onClose={() => setDetailStreamId(null)}
               onCancel={handleCancel}
+              onPause={handlePause}
+              onResume={handleResume}
+              signAction={wallet.signAction}
+              walletAddress={wallet.address}
             />
           )}
         </>

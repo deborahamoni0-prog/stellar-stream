@@ -1092,3 +1092,246 @@ td {
     animation-iteration-count: 1 !important;
   }
 }
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   DARK MODE
+   Applied via the `dark` class on <html> (set by useTheme / anti-FOUC script)
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+:root {
+  --bg-page: #f6f8fb;
+  --bg-card: #ffffff;
+  --bg-input: #ffffff;
+  --bg-muted: #f9fafb;
+  --bg-table-head: #ffffff;
+  --color-text: #1f2937;
+  --color-text-muted: #6b7280;
+  --color-text-label: #374151;
+  --border: #e5e7eb;
+  --border-input: #d1d5db;
+  --modal-backdrop: rgba(15, 23, 42, 0.45);
+}
+
+.dark {
+  --bg-page: #0f1117;
+  --bg-card: #1a1d2e;
+  --bg-input: #1e2235;
+  --bg-muted: #141627;
+  --bg-table-head: #1a1d2e;
+  --color-text: #f3f4f6;
+  --color-text-muted: #9ca3af;
+  --color-text-label: #d1d5db;
+  --border: #2a2d3e;
+  --border-input: #374151;
+  --modal-backdrop: rgba(0, 0, 0, 0.65);
+}
+
+/* ── Base ─────────────────────────────────────────────────────────────────── */
+
+body {
+  background: var(--bg-page);
+  color: var(--color-text);
+}
+
+/* ── Cards & surfaces ─────────────────────────────────────────────────────── */
+
+.card,
+.metric-card,
+.chart-section,
+.modal-panel,
+.issue-item,
+.activity-item,
+.fee-preview-list div {
+  background: var(--bg-card);
+  border-color: var(--border);
+  color: var(--color-text);
+}
+
+/* ── Table ────────────────────────────────────────────────────────────────── */
+
+.streams-table-head,
+.streams-table-head th {
+  background: var(--bg-table-head);
+}
+
+th,
+td {
+  border-bottom-color: var(--border);
+}
+
+/* ── Form inputs ──────────────────────────────────────────────────────────── */
+
+.field-group input,
+input {
+  background: var(--bg-input);
+  border-color: var(--border-input);
+  color: var(--color-text);
+}
+
+.field-group label {
+  color: var(--color-text-label);
+}
+
+.field-hint {
+  color: var(--color-text-muted);
+}
+
+.input-readonly {
+  background: var(--bg-muted) !important;
+  color: var(--color-text-muted) !important;
+}
+
+/* ── Buttons ──────────────────────────────────────────────────────────────── */
+
+.btn-ghost {
+  background: var(--bg-card);
+  border-color: var(--border);
+  color: var(--color-text);
+}
+
+.btn-ghost:hover:not(:disabled) {
+  background: var(--bg-muted);
+}
+
+/* ── Muted / secondary text ───────────────────────────────────────────────── */
+
+.muted,
+.metric-card span,
+.hero-copy,
+.chart-section__title,
+.recipient-dashboard-section-title {
+  color: var(--color-text-muted);
+}
+
+/* ── Wallet address chip ─────────────────────────────────────────────────── */
+
+.dark .wallet-address {
+  background: #0d2b1d;
+  border-color: #166534;
+  color: #86efac;
+}
+
+/* ── Nav ─────────────────────────────────────────────────────────────────── */
+
+.app-nav {
+  border-bottom-color: var(--border);
+}
+
+/* ── Modal ───────────────────────────────────────────────────────────────── */
+
+.modal-backdrop {
+  background: var(--modal-backdrop);
+}
+
+.modal-title {
+  color: var(--color-text);
+}
+
+.modal-close {
+  color: var(--color-text-muted);
+}
+
+.dark .modal-close:hover {
+  background: #2a2d3e;
+  color: var(--color-text);
+}
+
+/* ── Skeletons ───────────────────────────────────────────────────────────── */
+
+.dark .skeleton {
+  background: #2a2d3e;
+  background-image: linear-gradient(
+    to right,
+    #2a2d3e 0%,
+    #353849 20%,
+    #2a2d3e 40%,
+    #2a2d3e 100%
+  );
+}
+
+/* ── Progress bar track ──────────────────────────────────────────────────── */
+
+.dark .progress-bar {
+  background: #2a2d3e;
+}
+
+/* ── Empty / loading states ──────────────────────────────────────────────── */
+
+.dark .chart-empty-state,
+.dark .recipient-dashboard-empty,
+.dark .recipient-dashboard-loading {
+  background: var(--bg-muted);
+  border-color: var(--border);
+}
+
+/* ── Draft recovery banner ───────────────────────────────────────────────── */
+
+.dark .draft-recovery-banner {
+  background: #052e16;
+  border-color: #166534;
+  color: #86efac;
+}
+
+/* ── Error / warning boxes ───────────────────────────────────────────────── */
+
+.dark .api-error-box {
+  background: #2d1a07;
+  border-color: #92400e;
+}
+
+.dark .api-error-box__title {
+  color: #fcd34d;
+}
+
+.dark .api-error-box__hint {
+  color: #fde68a;
+}
+
+.dark .form-summary-error {
+  background: #2d0a0a;
+  border-color: #991b1b;
+  color: #fca5a5;
+}
+
+.dark .error-banner {
+  background: #2d0a0a;
+  border-color: #991b1b;
+  color: #fca5a5;
+}
+
+/* ── Fee preview ─────────────────────────────────────────────────────────── */
+
+.dark .fee-preview-list dt {
+  color: var(--color-text-muted);
+}
+
+.dark .fee-preview-list dd {
+  color: var(--color-text);
+}
+
+/* ── Activity feed ───────────────────────────────────────────────────────── */
+
+.dark .activity-icon {
+  background: #2a2d3e;
+}
+
+.dark .activity-title {
+  color: var(--color-text);
+}
+
+.dark .activity-empty {
+  background: var(--bg-muted);
+  border-color: var(--border);
+  color: var(--color-text-muted);
+}
+
+/* ── Dark mode toggle button ─────────────────────────────────────────────── */
+
+.dark-mode-toggle {
+  font-size: 1.2rem;
+  min-height: 36px;
+  display: flex;
+  align-items: center;
+  margin-right: 0.5rem;
+}

@@ -128,8 +128,10 @@ function migrate(): void {
 
   addColumnIfMissing("streams", "paused_at", "INTEGER");
   addColumnIfMissing("streams", "paused_duration", "INTEGER NOT NULL DEFAULT 0");
+  addColumnIfMissing("streams", "metadata", "TEXT");
   addColumnIfMissing("stream_archive", "paused_at", "INTEGER");
   addColumnIfMissing("stream_archive", "paused_duration", "INTEGER NOT NULL DEFAULT 0");
+  addColumnIfMissing("stream_archive", "metadata", "TEXT");
   addColumnIfMissing("webhook_dead_letters", "stream_id", "TEXT NOT NULL DEFAULT ''");
   addColumnIfMissing("webhook_dead_letters", "event", "TEXT NOT NULL DEFAULT ''");
 }

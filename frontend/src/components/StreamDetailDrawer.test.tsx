@@ -4,32 +4,68 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { http, HttpResponse } from 'msw';
 import { server } from '../server';
 import { StreamDetailDrawer } from './StreamDetailDrawer';
-
 import { clearCache } from '../services/api';
+
+// ---------------------------------------------------------------------------
+// Shared mock handlers
+// ---------------------------------------------------------------------------
 
 const onClose = vi.fn();
 const onCancel = vi.fn().mockResolvedValue(undefined);
+const onPause = vi.fn().mockResolvedValue(undefined);
+const onResume = vi.fn().mockResolvedValue(undefined);
+const signAction = vi.fn().mockResolvedValue('mock-signature');
+
+/** Returns an MSW override that serves a stream with the given status */
+function streamWithStatus(status: string, sender = 'GSENDER123') {
+  return http.get('/api/streams/:id', () =>
+    HttpResponse.json({
+      data: {
+        id: '42',
+        sender,
+        recipient: 'GRECIPIENT456',
+        assetCode: 'USDC',
+        totalAmount: 1000,
+        durationSeconds: 86400,
+        startAt: 1700000000,
+        createdAt: 1699990000,
+        progress: {
+          status,
+          ratePerSecond: 0.01157,
+          elapsedSeconds: 43200,
+          vestedAmount: 500,
+          remainingAmount: 500,
+          percentComplete: 50,
+        },
+      },
+    }),
+  );
+}
 
 beforeEach(() => {
   onClose.mockClear();
   onCancel.mockClear();
+  onPause.mockClear();
+  onResume.mockClear();
+  signAction.mockClear();
   clearCache();
 });
+
+// ---------------------------------------------------------------------------
+// Original drawer tests (kept passing)
+// ---------------------------------------------------------------------------
 
 describe('StreamDetailDrawer', () => {
   it('shows skeleton while loading', () => {
     render(<StreamDetailDrawer streamId="42" onClose={onClose} />);
-    // aria-busy skeleton container should be present immediately
     expect(screen.getByLabelText('Loading stream details')).toBeInTheDocument();
   });
 
   it('renders stream metadata after load', async () => {
     render(<StreamDetailDrawer streamId="42" onClose={onClose} />);
     await waitFor(() => expect(screen.getByText('Stream Detail')).toBeInTheDocument());
-    // Metadata
     expect(screen.getByText('42')).toBeInTheDocument();
     expect(screen.getByText('active')).toBeInTheDocument();
-    // Asset row in metadata dl
     expect(screen.getAllByText(/1000.*USDC/).length).toBeGreaterThan(0);
   });
 
@@ -47,9 +83,7 @@ describe('StreamDetailDrawer', () => {
 
   it('shows empty history placeholder when no events', async () => {
     server.use(
-      http.get('/api/streams/:id/history', () =>
-        HttpResponse.json({ data: [] })
-      )
+      http.get('/api/streams/:id/history', () => HttpResponse.json({ data: [] })),
     );
     render(<StreamDetailDrawer streamId="42" onClose={onClose} />);
     await waitFor(() => expect(screen.getByText('No events yet.')).toBeInTheDocument());
@@ -57,9 +91,7 @@ describe('StreamDetailDrawer', () => {
 
   it('shows error state for missing stream', async () => {
     render(<StreamDetailDrawer streamId="missing" onClose={onClose} />);
-    await waitFor(() =>
-      expect(screen.getByRole('alert')).toBeInTheDocument()
-    );
+    await waitFor(() => expect(screen.getByRole('alert')).toBeInTheDocument());
     expect(screen.getByText(/could not be found/i)).toBeInTheDocument();
   });
 
@@ -95,31 +127,7 @@ describe('StreamDetailDrawer', () => {
   });
 
   it('cancel button is disabled for finalized streams', async () => {
-    server.use(
-      http.get('/api/streams/:id', () =>
-        HttpResponse.json({
-          data: {
-            id: '42',
-            sender: 'GSENDER',
-            recipient: 'GRECIPIENT',
-            assetCode: 'USDC',
-            totalAmount: 1000,
-            durationSeconds: 86400,
-            startAt: 1700000000,
-            createdAt: 1699990000,
-            canceledAt: 1700050000,
-            progress: {
-              status: 'canceled',
-              ratePerSecond: 0,
-              elapsedSeconds: 0,
-              vestedAmount: 0,
-              remainingAmount: 0,
-              percentComplete: 0,
-            },
-          },
-        })
-      )
-    );
+    server.use(streamWithStatus('canceled'));
     render(<StreamDetailDrawer streamId="42" onClose={onClose} onCancel={onCancel} />);
     await waitFor(() => expect(screen.getByText('Cancel Stream')).toBeDisabled());
   });
@@ -127,5 +135,271 @@ describe('StreamDetailDrawer', () => {
   it('does not render cancel button when onCancel is not provided', async () => {
     render(<StreamDetailDrawer streamId="42" onClose={onClose} />);
     await waitFor(() => expect(screen.queryByText('Cancel Stream')).not.toBeInTheDocument());
+  });
+
+  // ── Pause button visibility ───────────────────────────────────────────────
+
+  describe('Pause button', () => {
+    it('visible for active stream when wallet matches sender', async () => {
+      // Default MSW stream is active, sender = GSENDER123
+      render(
+        <StreamDetailDrawer
+          streamId="42"
+          onClose={onClose}
+          onPause={onPause}
+          signAction={signAction}
+          walletAddress="GSENDER123"
+        />,
+      );
+      await waitFor(() => expect(screen.getByText('⏸ Pause')).toBeInTheDocument());
+    });
+
+    it('not visible when wallet does not match sender', async () => {
+      render(
+        <StreamDetailDrawer
+          streamId="42"
+          onClose={onClose}
+          onPause={onPause}
+          signAction={signAction}
+          walletAddress="GDIFFERENT"
+        />,
+      );
+      await waitFor(() => expect(screen.queryByText('⏸ Pause')).not.toBeInTheDocument());
+    });
+
+    it('not visible when wallet is not connected (null)', async () => {
+      render(
+        <StreamDetailDrawer
+          streamId="42"
+          onClose={onClose}
+          onPause={onPause}
+          signAction={signAction}
+          walletAddress={null}
+        />,
+      );
+      await waitFor(() => expect(screen.queryByText('⏸ Pause')).not.toBeInTheDocument());
+    });
+
+    it('not visible for paused stream (already paused)', async () => {
+      server.use(streamWithStatus('paused'));
+      render(
+        <StreamDetailDrawer
+          streamId="42"
+          onClose={onClose}
+          onPause={onPause}
+          signAction={signAction}
+          walletAddress="GSENDER123"
+        />,
+      );
+      await waitFor(() => expect(screen.queryByText('⏸ Pause')).not.toBeInTheDocument());
+    });
+
+    it('not visible for completed stream', async () => {
+      server.use(streamWithStatus('completed'));
+      render(
+        <StreamDetailDrawer
+          streamId="42"
+          onClose={onClose}
+          onPause={onPause}
+          signAction={signAction}
+          walletAddress="GSENDER123"
+        />,
+      );
+      await waitFor(() => expect(screen.queryByText('⏸ Pause')).not.toBeInTheDocument());
+    });
+
+    it('not visible when onPause prop is absent', async () => {
+      render(
+        <StreamDetailDrawer
+          streamId="42"
+          onClose={onClose}
+          signAction={signAction}
+          walletAddress="GSENDER123"
+        />,
+      );
+      await waitFor(() => expect(screen.queryByText('⏸ Pause')).not.toBeInTheDocument());
+    });
+
+    it('not visible when signAction prop is absent', async () => {
+      render(
+        <StreamDetailDrawer
+          streamId="42"
+          onClose={onClose}
+          onPause={onPause}
+          walletAddress="GSENDER123"
+        />,
+      );
+      await waitFor(() => expect(screen.queryByText('⏸ Pause')).not.toBeInTheDocument());
+    });
+  });
+
+  // ── Resume button visibility ──────────────────────────────────────────────
+
+  describe('Resume button', () => {
+    it('visible for paused stream when wallet matches sender', async () => {
+      server.use(streamWithStatus('paused'));
+      render(
+        <StreamDetailDrawer
+          streamId="42"
+          onClose={onClose}
+          onResume={onResume}
+          signAction={signAction}
+          walletAddress="GSENDER123"
+        />,
+      );
+      await waitFor(() => expect(screen.getByText('▶ Resume')).toBeInTheDocument());
+    });
+
+    it('not visible for active stream (not paused)', async () => {
+      render(
+        <StreamDetailDrawer
+          streamId="42"
+          onClose={onClose}
+          onResume={onResume}
+          signAction={signAction}
+          walletAddress="GSENDER123"
+        />,
+      );
+      await waitFor(() => expect(screen.queryByText('▶ Resume')).not.toBeInTheDocument());
+    });
+
+    it('not visible when wallet does not match sender', async () => {
+      server.use(streamWithStatus('paused'));
+      render(
+        <StreamDetailDrawer
+          streamId="42"
+          onClose={onClose}
+          onResume={onResume}
+          signAction={signAction}
+          walletAddress="GDIFFERENT"
+        />,
+      );
+      await waitFor(() => expect(screen.queryByText('▶ Resume')).not.toBeInTheDocument());
+    });
+
+    it('not visible when wallet is not connected', async () => {
+      server.use(streamWithStatus('paused'));
+      render(
+        <StreamDetailDrawer
+          streamId="42"
+          onClose={onClose}
+          onResume={onResume}
+          signAction={signAction}
+          walletAddress={null}
+        />,
+      );
+      await waitFor(() => expect(screen.queryByText('▶ Resume')).not.toBeInTheDocument());
+    });
+  });
+
+  // ── Pause action flow ─────────────────────────────────────────────────────
+
+  describe('Pause action', () => {
+    it('calls signAction with correct payload then calls onPause', async () => {
+      render(
+        <StreamDetailDrawer
+          streamId="42"
+          onClose={onClose}
+          onPause={onPause}
+          signAction={signAction}
+          walletAddress="GSENDER123"
+        />,
+      );
+      await waitFor(() => expect(screen.getByText('⏸ Pause')).toBeInTheDocument());
+
+      fireEvent.click(screen.getByText('⏸ Pause'));
+
+      await waitFor(() => expect(signAction).toHaveBeenCalledTimes(1));
+      const [payload] = signAction.mock.calls[0];
+      expect(payload.action).toBe('pause');
+      expect(payload.streamId).toBe('42');
+      expect(typeof payload.timestamp).toBe('number');
+
+      await waitFor(() => expect(onPause).toHaveBeenCalledWith('42'));
+    });
+
+    it('shows error alert when signAction rejects', async () => {
+      signAction.mockRejectedValueOnce(new Error('User rejected signing'));
+      render(
+        <StreamDetailDrawer
+          streamId="42"
+          onClose={onClose}
+          onPause={onPause}
+          signAction={signAction}
+          walletAddress="GSENDER123"
+        />,
+      );
+      await waitFor(() => expect(screen.getByText('⏸ Pause')).toBeInTheDocument());
+      fireEvent.click(screen.getByText('⏸ Pause'));
+      await waitFor(() =>
+        expect(screen.getByRole('alert')).toHaveTextContent('User rejected signing'),
+      );
+      expect(onPause).not.toHaveBeenCalled();
+    });
+
+    it('shows error alert when onPause rejects', async () => {
+      onPause.mockRejectedValueOnce(new Error('API error 503'));
+      render(
+        <StreamDetailDrawer
+          streamId="42"
+          onClose={onClose}
+          onPause={onPause}
+          signAction={signAction}
+          walletAddress="GSENDER123"
+        />,
+      );
+      await waitFor(() => expect(screen.getByText('⏸ Pause')).toBeInTheDocument());
+      fireEvent.click(screen.getByText('⏸ Pause'));
+      await waitFor(() =>
+        expect(screen.getByRole('alert')).toHaveTextContent('API error 503'),
+      );
+    });
+  });
+
+  // ── Resume action flow ────────────────────────────────────────────────────
+
+  describe('Resume action', () => {
+    it('calls signAction with correct payload then calls onResume', async () => {
+      server.use(streamWithStatus('paused'));
+      render(
+        <StreamDetailDrawer
+          streamId="42"
+          onClose={onClose}
+          onResume={onResume}
+          signAction={signAction}
+          walletAddress="GSENDER123"
+        />,
+      );
+      await waitFor(() => expect(screen.getByText('▶ Resume')).toBeInTheDocument());
+
+      fireEvent.click(screen.getByText('▶ Resume'));
+
+      await waitFor(() => expect(signAction).toHaveBeenCalledTimes(1));
+      const [payload] = signAction.mock.calls[0];
+      expect(payload.action).toBe('resume');
+      expect(payload.streamId).toBe('42');
+      expect(typeof payload.timestamp).toBe('number');
+
+      await waitFor(() => expect(onResume).toHaveBeenCalledWith('42'));
+    });
+
+    it('shows error alert when onResume rejects', async () => {
+      server.use(streamWithStatus('paused'));
+      onResume.mockRejectedValueOnce(new Error('Resume failed'));
+      render(
+        <StreamDetailDrawer
+          streamId="42"
+          onClose={onClose}
+          onResume={onResume}
+          signAction={signAction}
+          walletAddress="GSENDER123"
+        />,
+      );
+      await waitFor(() => expect(screen.getByText('▶ Resume')).toBeInTheDocument());
+      fireEvent.click(screen.getByText('▶ Resume'));
+      await waitFor(() =>
+        expect(screen.getByRole('alert')).toHaveTextContent('Resume failed'),
+      );
+    });
   });
 });

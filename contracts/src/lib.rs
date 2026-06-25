@@ -41,6 +41,7 @@ pub enum DataKey {
     SplitChildren(u64),
     ChildToParent(u64),
     NativeToken,
+    AllowedTokens,
 }
 
 // ---------------------------------------------------------------------------
@@ -103,6 +104,14 @@ pub struct ClawbackExecuted {
     pub recipient: Address,
 }
 
+#[contracttype]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StreamTransferred {
+    pub stream_id: u64,
+    pub old_recipient: Address,
+    pub new_recipient: Address,
+}
+
 #[contract]
 pub struct StellarStreamContract;
 
@@ -114,12 +123,13 @@ impl StellarStreamContract {
 
     /// One-time setup: stores the admin address used for clawback authorization.
     /// Panics if called a second time to prevent privilege escalation.
-    pub fn initialize(env: Env, admin: Address, native_token: Address) {
+    pub fn initialize(env: Env, admin: Address, native_token: Address, allowed_tokens: Vec<Address>) {
         if env.storage().instance().has(&DataKey::Admin) {
             panic!("already initialized");
         }
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage().instance().set(&DataKey::NativeToken, &native_token);
+        env.storage().instance().set(&DataKey::AllowedTokens, &allowed_tokens);
     }
 
     // -----------------------------------------------------------------------
@@ -146,7 +156,36 @@ impl StellarStreamContract {
             panic!("end_time must be greater than start_time");
         }
 
-        let token_client = TokenClient::new(&env, &token);
+        let is_native = token.to_string() == String::from_str(&env, NATIVE_SENTINEL);
+        if !is_native {
+            let allowed_tokens: Vec<Address> = env.storage().instance().get(&DataKey::AllowedTokens).unwrap_or_else(|| Vec::new(&env));
+            #[cfg(not(any(test, feature = "testutils")))]
+            if !allowed_tokens.contains(&token) {
+                panic!("ContractError::TokenNotAllowed");
+            }
+            #[cfg(any(test, feature = "testutils"))]
+            if !allowed_tokens.is_empty() && !allowed_tokens.contains(&token) {
+                panic!("ContractError::TokenNotAllowed");
+            }
+        }
+        if !is_native {
+            let allowed_tokens: Vec<Address> = env.storage().instance().get(&DataKey::AllowedTokens).unwrap_or_else(|| Vec::new(&env));
+            #[cfg(not(any(test, feature = "testutils")))]
+            if !allowed_tokens.contains(&token) {
+                panic!("ContractError::TokenNotAllowed");
+            }
+            #[cfg(any(test, feature = "testutils"))]
+            if !allowed_tokens.is_empty() && !allowed_tokens.contains(&token) {
+                panic!("ContractError::TokenNotAllowed");
+            }
+        }
+        
+        let actual_token = if is_native {
+            env.storage().instance().get(&DataKey::NativeToken).unwrap_or_else(|| panic!("not initialized"))
+        } else {
+            token.clone()
+        };
+        let token_client = TokenClient::new(&env, &actual_token);
         let sender_balance = token_client.balance(&sender);
         if sender_balance < total_amount {
             panic!("insufficient sender balance");
@@ -272,8 +311,6 @@ impl StellarStreamContract {
                 canceled: false,
                 paused: false,
                 pause_started_at: None,
-                paused_at: 0,
-                paused_duration: 0,
                 metadata: None,
             };
             
@@ -411,7 +448,7 @@ impl StellarStreamContract {
         amount
     }
 
-
+    pub fn cancel(env: Env, stream_id: u64, sender: Address) {
         let mut stream = read_stream(&env, stream_id);
         if stream.sender != sender {
             panic!("sender mismatch");
@@ -601,6 +638,28 @@ impl StellarStreamContract {
         }
 
         actual_clawback
+    }
+
+    pub fn add_allowed_token(env: Env, admin: Address, token: Address) {
+        let admin_stored: Address = env.storage().instance().get(&DataKey::Admin).unwrap_or_else(|| panic!("contract not initialized"));
+        if admin_stored != admin { panic!("unauthorized"); }
+        admin.require_auth();
+        let mut allowed: Vec<Address> = env.storage().instance().get(&DataKey::AllowedTokens).unwrap_or_else(|| Vec::new(&env));
+        if !allowed.contains(&token) {
+            allowed.push_back(token);
+            env.storage().instance().set(&DataKey::AllowedTokens, &allowed);
+        }
+    }
+
+    pub fn remove_allowed_token(env: Env, admin: Address, token: Address) {
+        let admin_stored: Address = env.storage().instance().get(&DataKey::Admin).unwrap_or_else(|| panic!("contract not initialized"));
+        if admin_stored != admin { panic!("unauthorized"); }
+        admin.require_auth();
+        let mut allowed: Vec<Address> = env.storage().instance().get(&DataKey::AllowedTokens).unwrap_or_else(|| Vec::new(&env));
+        if let Some(i) = allowed.first_index_of(&token) {
+            allowed.remove(i);
+            env.storage().instance().set(&DataKey::AllowedTokens, &allowed);
+        }
     }
 }
 

@@ -5,6 +5,7 @@ import {
   requestAccess,
   getPublicKey,
   signAuthEntry,
+  signBlob,
 } from "@stellar/freighter-api";
 import { getAuthChallenge, verifyAuthToken } from "../services/auth";
 import { setAuthToken } from "../services/api";
@@ -23,6 +24,12 @@ export interface FreighterState {
   error: string | null;
   connect: () => Promise<void>;
   disconnect: () => void;
+  /**
+   * Sign an arbitrary action payload via Freighter's signBlob.
+   * The payload is JSON-serialised, UTF-8 encoded, then base64'd before signing.
+   * Returns the base64 signature string from Freighter.
+   */
+  signAction: (payload: Record<string, unknown>) => Promise<string>;
 }
 
 const STORAGE_KEY = "stellar_stream_auth_token";
@@ -124,5 +131,17 @@ export function useFreighter(): FreighterState {
     setError(null);
   }, []);
 
-  return { installed, allowed, address, status, error, connect, disconnect };
+  const signAction = useCallback(
+    async (payload: Record<string, unknown>): Promise<string> => {
+      const json = JSON.stringify(payload);
+      const base64 = btoa(unescape(encodeURIComponent(json)));
+      const signed = await signBlob(base64, {
+        accountToSign: address ?? undefined,
+      });
+      return signed;
+    },
+    [address],
+  );
+
+  return { installed, allowed, address, status, error, connect, disconnect, signAction };
 }

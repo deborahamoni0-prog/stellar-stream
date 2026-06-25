@@ -258,6 +258,45 @@ function processEvent(db: any, event: rpc.Api.EventResponse): void {
           event.ledger,
         );
         break;
+
+      case "Paused":
+        recordEventWithDb(
+          db,
+          value.stream_id.toString(),
+          "paused",
+          timestamp,
+          value.sender,
+          undefined,
+          undefined,
+          event.ledger,
+        );
+        break;
+
+      case "Resumed":
+        recordEventWithDb(
+          db,
+          value.stream_id.toString(),
+          "resumed",
+          timestamp,
+          value.sender,
+          undefined,
+          undefined,
+          event.ledger,
+        );
+        break;
+
+      case "Transfer":
+        recordEventWithDb(
+          db,
+          value.stream_id.toString(),
+          "transferred",
+          timestamp,
+          value.old_recipient,
+          undefined,
+          { new_recipient: value.new_recipient },
+          event.ledger,
+        );
+        break;
     }
   } catch (err) {
     logger.error({ err }, "failed to process event");

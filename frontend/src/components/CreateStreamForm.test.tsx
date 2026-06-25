@@ -46,14 +46,28 @@ describe('CreateStreamForm Component', () => {
 
   it('renders all required form fields', () => {
     render(<CreateStreamForm onCreate={vi.fn()} walletAddress={VALID_ADDRESS_1} />);
-    
+
     expect(screen.getByLabelText(/Sender Account/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/Recipient Account/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/Asset Code/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/Total Amount/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/Duration/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/Start In/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Cliff Period/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Create Stream/i })).toBeInTheDocument();
+  });
+
+  it('validates cliff period must be less than stream duration', async () => {
+    render(<CreateStreamForm onCreate={vi.fn()} walletAddress={VALID_ADDRESS_1} />);
+
+    const cliffInput = screen.getByLabelText(/Cliff Period/i);
+    fireEvent.change(cliffInput, { target: { value: '2' } });
+    // Duration is 1440 minutes = 1 day. Cliff of 2 days > 1 day duration
+    const durationInput = screen.getByLabelText(/Duration/i);
+    fireEvent.change(durationInput, { target: { value: '1440' } });
+    fireEvent.blur(cliffInput);
+
+    expect(screen.getByText(/Cliff must be less than the stream duration/i)).toBeInTheDocument();
   });
 
   it('previews the simulated fee before confirming a valid stream', async () => {

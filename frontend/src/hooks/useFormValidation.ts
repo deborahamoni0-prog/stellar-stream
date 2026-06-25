@@ -25,6 +25,7 @@ export interface FieldErrors {
   totalAmount?: string;
   durationMinutes?: string;
   startInMinutes?: string;
+  cliffDays?: string;
 }
 
 /**
@@ -37,6 +38,7 @@ export interface FormValues {
   totalAmount: string;
   durationMinutes: string;
   startInMinutes: string;
+  cliffDays: string;
 }
 
 /**
@@ -123,6 +125,21 @@ export function validateForm(values: FormValues): FieldErrors {
     errors.startInMinutes = "Enter 0 to start immediately, or a positive number of minutes.";
   } else if (!Number.isInteger(startNum) || startNum < 0) {
     errors.startInMinutes = "Must be 0 or a positive whole number.";
+  }
+
+  // --- Cliff period (optional, defaults to 0) ---
+  const cliffDaysStr = values.cliffDays?.trim() ?? "";
+  if (cliffDaysStr !== "" && cliffDaysStr !== "0") {
+    const cliffNum = Number(cliffDaysStr);
+    if (isNaN(cliffNum) || cliffNum < 0) {
+      errors.cliffDays = "Cliff must be 0 or a positive number.";
+    } else {
+      const cliffSeconds = cliffNum * 86400;
+      const durationSeconds = durationNum * 60;
+      if (!isNaN(durationNum) && durationNum >= 1 && cliffSeconds >= durationSeconds) {
+        errors.cliffDays = "Cliff must be less than the stream duration.";
+      }
+    }
   }
 
   return errors;

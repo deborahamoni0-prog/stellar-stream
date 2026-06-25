@@ -12,11 +12,9 @@ backend/data/
 .current_bench.tmp
 .bench_results.tmp
 
-# Generated Soroban contract bindings
+# Generated Soroban contract bindings are committed to the repository
 # Regenerate with: CONTRACT_ID=$(cat contracts/contract_id.txt) npm run gen:bindings
 # See docs/CONTRACT_BINDINGS.md for the full workflow.
-frontend/src/contracts/generated/*
-!frontend/src/contracts/generated/README.md
 
 # Deployed contract ID (changes per deployment, not committed)
 contracts/contract_id.txt

@@ -712,3 +712,67 @@ it("handles multiple streams in a single transaction", async () => {
     });
   });
 });
+
+describe("metadata round-trip", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.clearAllMocks();
+
+    mockState.nextId = 2;
+    mockState.existingStreamIds = new Set<string>();
+    mockState.chainStreams = new Map<number, any>();
+    mockState.upsertedStreams = [];
+    mockState.createdEventIds = new Set<string>();
+
+    dbMocks.initDb.mockImplementation(() => undefined);
+
+    process.env.CONTRACT_ID = "test-contract";
+    process.env.RPC_URL = "https://rpc.test";
+    delete process.env.SERVER_PRIVATE_KEY;
+  });
+
+  it("syncStreams reads metadata from on-chain stream and stores it as JSON", async () => {
+    mockState.nextId = 2;
+    mockState.chainStreams.set(1, {
+      sender: "GSENDER",
+      recipient: "GRECIPIENT",
+      token: "USDC",
+      total_amount: 1000,
+      start_time: 0,
+      end_time: 1000,
+      canceled: false,
+      metadata: { purpose: "salary", project: "apollo" },
+    });
+
+    let storedMetadata: string | null = null;
+    const dbMock = {
+      prepare(sql: string) {
+        if (sql.includes("SELECT id FROM streams")) {
+          return { all: () => [] };
+        }
+        if (sql.includes("INSERT INTO streams")) {
+          return {
+            run: (params: any) => {
+              mockState.existingStreamIds.add(params.id);
+              storedMetadata = params.metadata;
+              return { changes: 1 };
+            },
+          };
+        }
+        throw new Error(`Unexpected SQL: ${sql}`);
+      },
+      transaction<T extends (...args: any[]) => any>(callback: T): T {
+        return ((...args: Parameters<T>) => callback(...args)) as T;
+      },
+    };
+    dbMocks.getDb.mockReturnValue(dbMock);
+
+    const { initSoroban, syncStreams } = await import("./streamStore");
+    await initSoroban();
+    await syncStreams();
+
+    expect(storedMetadata).not.toBeNull();
+    const parsed = JSON.parse(storedMetadata!);
+    expect(parsed).toEqual({ purpose: "salary", project: "apollo" });
+  });
+});

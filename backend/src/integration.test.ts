@@ -4,6 +4,8 @@ import { app } from "./index";
 import { initDb, getDb } from "./services/db";
 import { initCache, getCache } from "./services/cache";
 import { Keypair } from "@stellar/stellar-sdk";
+import jwt from "jsonwebtoken";
+import { getJwtSecret } from "./services/auth";
 import path from "path";
 import fs from "fs";
 
@@ -837,6 +839,106 @@ describe("Backend Integration Tests", () => {
 
         expect(response.status).toBe(400);
         expect(response.body.error).toContain("status must be one of");
+      });
+    });
+
+    describe("POST /api/streams/:id/claim", () => {
+      let recipientKeypair: ReturnType<typeof Keypair.random>;
+      let senderKeypair: ReturnType<typeof Keypair.random>;
+      let claimStreamId: string;
+      let recipientToken: string;
+
+      beforeEach(() => {
+        recipientKeypair = Keypair.random();
+        senderKeypair = Keypair.random();
+        const now = Math.floor(Date.now() / 1000);
+        claimStreamId = "100";
+
+        const db = getDb();
+        db.prepare(`
+          INSERT INTO streams (id, sender, recipient, asset_code, total_amount, duration_seconds, start_at, created_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+          claimStreamId,
+          senderKeypair.publicKey(),
+          recipientKeypair.publicKey(),
+          "USDC",
+          1000,
+          3600,
+          now - 1800,
+          now - 1800,
+        );
+
+        recipientToken = jwt.sign(
+          { accountId: recipientKeypair.publicKey() },
+          getJwtSecret(),
+          { expiresIn: "1h" },
+        );
+      });
+
+      it("should allow the recipient to claim vested tokens", async () => {
+        const response = await request(app)
+          .post(`/api/streams/${claimStreamId}/claim`)
+          .set("Authorization", `Bearer ${recipientToken}`);
+
+        expect(response.status).toBe(200);
+        expect(response.body.result.claimedAmount).toBeGreaterThan(0);
+        expect(response.body.result.assetCode).toBe("USDC");
+        expect(response.body.result.txHash).toMatch(/^local-/);
+      });
+
+      it("should return 403 when a non-recipient tries to claim", async () => {
+        const nonRecipientToken = jwt.sign(
+          { accountId: senderKeypair.publicKey() },
+          getJwtSecret(),
+          { expiresIn: "1h" },
+        );
+
+        const response = await request(app)
+          .post(`/api/streams/${claimStreamId}/claim`)
+          .set("Authorization", `Bearer ${nonRecipientToken}`);
+
+        expect(response.status).toBe(403);
+        expect(response.body.code).toBe("FORBIDDEN");
+      });
+
+      it("should reject a second sequential claim on the same stream", async () => {
+        const first = await request(app)
+          .post(`/api/streams/${claimStreamId}/claim`)
+          .set("Authorization", `Bearer ${recipientToken}`);
+        expect(first.status).toBe(200);
+
+        const second = await request(app)
+          .post(`/api/streams/${claimStreamId}/claim`)
+          .set("Authorization", `Bearer ${recipientToken}`);
+        expect(second.status).toBe(409);
+        expect(second.body.code).toBe("ALREADY_CLAIMED");
+
+        const db = getDb();
+        const claimEvents = db
+          .prepare(`SELECT * FROM stream_events WHERE stream_id = ? AND event_type = 'claimed'`)
+          .all(claimStreamId);
+        expect(claimEvents).toHaveLength(1);
+      });
+
+      it("should prevent double-spend under concurrent claims", async () => {
+        const [res1, res2] = await Promise.all([
+          request(app)
+            .post(`/api/streams/${claimStreamId}/claim`)
+            .set("Authorization", `Bearer ${recipientToken}`),
+          request(app)
+            .post(`/api/streams/${claimStreamId}/claim`)
+            .set("Authorization", `Bearer ${recipientToken}`),
+        ]);
+
+        const statuses = [res1.status, res2.status].sort((a, b) => a - b);
+        expect(statuses).toEqual([200, 409]);
+
+        const db = getDb();
+        const claimEvents = db
+          .prepare(`SELECT * FROM stream_events WHERE stream_id = ? AND event_type = 'claimed'`)
+          .all(claimStreamId);
+        expect(claimEvents).toHaveLength(1);
       });
     });
   });

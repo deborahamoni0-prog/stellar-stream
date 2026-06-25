@@ -11,14 +11,28 @@ export interface StreamStats {
   unique_recipients: number;
 }
 
+export interface GlobalStats {
+  total: number;
+  active: number;
+  scheduled: number;
+  paused: number;
+  completed: number;
+  canceled: number;
+  totalVested: number;
+  totalAmount: number;
+  uniqueSenders: number;
+  uniqueRecipients: number;
+}
+
 const CACHE_TTL_MS = 30_000;
-let cachedStats: StreamStats | null = null;
+let cachedStreamStats: StreamStats | null = null;
+let cachedGlobalStats: GlobalStats | null = null;
 let cacheExpiresAt = 0;
 
 export function getStreamStats(): StreamStats {
   const now = Date.now();
-  if (cachedStats && now < cacheExpiresAt) {
-    return cachedStats;
+  if (cachedStreamStats && now < cacheExpiresAt) {
+    return cachedStreamStats;
   }
 
   const db = getDb();
@@ -30,8 +44,9 @@ export function getStreamStats(): StreamStats {
       COUNT(CASE
         WHEN canceled_at IS NULL
          AND completed_at IS NULL
+         AND paused_at IS NULL
          AND start_at <= :now
-         AND (start_at + duration_seconds) > :now
+         AND (start_at + duration_seconds + paused_duration) > :now
         THEN 1 END)                                                 AS active_streams,
       COUNT(CASE WHEN completed_at IS NOT NULL THEN 1 END)          AS completed_streams,
       COUNT(CASE WHEN canceled_at  IS NOT NULL THEN 1 END)          AS canceled_streams,
@@ -41,7 +56,10 @@ export function getStreamStats(): StreamStats {
                AND start_at <= :now
           THEN
             CAST(
-              total_amount * MIN(CAST(:now - start_at AS REAL), CAST(duration_seconds AS REAL))
+              total_amount * MIN(
+                CASE WHEN paused_at IS NOT NULL THEN paused_at - start_at ELSE :now - start_at END,
+                CAST(duration_seconds AS REAL)
+              )
               / CAST(duration_seconds AS REAL)
             AS REAL)
           WHEN completed_at IS NOT NULL
@@ -55,7 +73,7 @@ export function getStreamStats(): StreamStats {
     FROM streams
   `).get({ now: nowSec }) as StreamStats;
 
-  cachedStats = {
+  cachedStreamStats = {
     total_streams:       row.total_streams,
     active_streams:      row.active_streams,
     completed_streams:   row.completed_streams,
@@ -67,11 +85,95 @@ export function getStreamStats(): StreamStats {
   };
   cacheExpiresAt = now + CACHE_TTL_MS;
 
-  return cachedStats;
+  return cachedStreamStats;
+}
+
+export function getGlobalStats(): GlobalStats {
+  const now = Date.now();
+  if (cachedGlobalStats && now < cacheExpiresAt) {
+    return cachedGlobalStats;
+  }
+
+  const db = getDb();
+  const nowSec = Math.floor(now / 1000);
+
+  const row = db.prepare(`
+    SELECT
+      COUNT(*)                                                      AS total,
+      COUNT(CASE
+        WHEN canceled_at IS NULL
+         AND completed_at IS NULL
+         AND paused_at IS NULL
+         AND start_at <= :now
+         AND (start_at + duration_seconds + paused_duration) > :now
+        THEN 1 END)                                                 AS active,
+      COUNT(CASE
+        WHEN canceled_at IS NULL
+         AND completed_at IS NULL
+         AND paused_at IS NULL
+         AND start_at > :now
+        THEN 1 END)                                                 AS scheduled,
+      COUNT(CASE
+        WHEN canceled_at IS NULL
+         AND completed_at IS NULL
+         AND paused_at IS NOT NULL
+        THEN 1 END)                                                 AS paused,
+      COUNT(CASE WHEN completed_at IS NOT NULL THEN 1 END)          AS completed,
+      COUNT(CASE WHEN canceled_at  IS NOT NULL THEN 1 END)          AS canceled,
+      COALESCE(SUM(
+        CASE
+          WHEN canceled_at IS NULL AND completed_at IS NULL
+               AND start_at <= :now
+          THEN
+            CAST(
+              total_amount * MIN(
+                CASE WHEN paused_at IS NOT NULL THEN paused_at - start_at ELSE :now - start_at END,
+                CAST(duration_seconds AS REAL)
+              )
+              / CAST(duration_seconds AS REAL)
+            AS REAL)
+          WHEN completed_at IS NOT NULL
+          THEN total_amount
+          ELSE 0
+        END
+      ), 0)                                                         AS totalVested,
+      COALESCE(SUM(total_amount), 0)                                AS totalAmount,
+      COUNT(DISTINCT sender)                                        AS uniqueSenders,
+      COUNT(DISTINCT recipient)                                     AS uniqueRecipients
+    FROM streams
+  `).get({ now: nowSec }) as {
+    total: number;
+    active: number;
+    scheduled: number;
+    paused: number;
+    completed: number;
+    canceled: number;
+    totalVested: number;
+    totalAmount: number;
+    uniqueSenders: number;
+    uniqueRecipients: number;
+  };
+
+  cachedGlobalStats = {
+    total: row.total,
+    active: row.active,
+    scheduled: row.scheduled,
+    paused: row.paused,
+    completed: row.completed,
+    canceled: row.canceled,
+    totalVested: Math.round(row.totalVested * 100) / 100,
+    totalAmount: Math.round(row.totalAmount * 100) / 100,
+    uniqueSenders: row.uniqueSenders,
+    uniqueRecipients: row.uniqueRecipients,
+  };
+  cacheExpiresAt = now + CACHE_TTL_MS;
+
+  return cachedGlobalStats;
 }
 
 /** Exposed for testing — resets the in-memory cache. */
 export function resetStatsCache(): void {
-  cachedStats = null;
+  cachedStreamStats = null;
+  cachedGlobalStats = null;
   cacheExpiresAt = 0;
 }

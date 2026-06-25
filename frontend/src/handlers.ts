@@ -72,4 +72,88 @@ export const handlers = [
       allowedAssets: ['USDC', 'XLM'],
     });
   }),
+
+  http.post('/api/streams/:id/cancel', ({ params }) => {
+    const { id } = params;
+    return HttpResponse.json({
+      data: {
+        id,
+        sender: 'GSENDER123',
+        recipient: 'GRECIPIENT456',
+        assetCode: 'USDC',
+        totalAmount: 1000,
+        durationSeconds: 86400,
+        startAt: 1700000000,
+        createdAt: 1699990000,
+        progress: {
+          status: 'canceled',
+          ratePerSecond: 0,
+          elapsedSeconds: 43200,
+          vestedAmount: 500,
+          remainingAmount: 500,
+          percentComplete: 50,
+        },
+      },
+    });
+  }),
+  http.post('/api/streams/:id/pause', ({ params }) => {
+    const { id } = params;
+    return HttpResponse.json({
+      data: {
+        id,
+        sender: 'GSENDER123',
+        recipient: 'GRECIPIENT456',
+        assetCode: 'USDC',
+        totalAmount: 1000,
+        durationSeconds: 86400,
+        startAt: 1700000000,
+        createdAt: 1699990000,
+        progress: {
+          status: 'paused',
+          ratePerSecond: 0.01157,
+          elapsedSeconds: 43200,
+          vestedAmount: 500,
+          remainingAmount: 500,
+          percentComplete: 50,
+        },
+      },
+    });
+  }),
+  http.post('/api/streams/:id/resume', ({ params }) => {
+    const { id } = params;
+    return HttpResponse.json({
+      data: {
+        id,
+        sender: 'GSENDER123',
+        recipient: 'GRECIPIENT456',
+        assetCode: 'USDC',
+        totalAmount: 1000,
+        durationSeconds: 86400,
+        startAt: 1700000000,
+        createdAt: 1699990000,
+        progress: {
+          status: 'active',
+          ratePerSecond: 0.01157,
+          elapsedSeconds: 43200,
+          vestedAmount: 500,
+          remainingAmount: 500,
+          percentComplete: 50,
+        },
+      },
+    });
+  }),
+
+  // Metrics history for StreamMetricsChart / useMetricsHistory
+  http.get('/api/metrics/history', () => {
+    const now = Date.now();
+    const day = 24 * 60 * 60 * 1000;
+    return HttpResponse.json({
+      data: Array.from({ length: 7 }, (_, i) => ({
+        timestamp: now - (6 - i) * day,
+        active: 10 + i * 2,
+        completed: 5 + i,
+        vested: 100 + i * 25,
+      })),
+    });
+  }),
 ];

@@ -48,6 +48,10 @@ if (!jwtSecret) {
   logger.warn(
     "JWT_SECRET not set — using ephemeral secret. All tokens will be invalidated on restart.",
   );
+} else {
+  logger.warn(
+    "JWT_SECRET is configured. Rotating this secret will invalidate all existing tokens and force all users to re-authenticate.",
+  );
 }
 
 export function getJwtSecret() {
