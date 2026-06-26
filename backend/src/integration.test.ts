@@ -77,6 +77,45 @@ describe("Backend Integration Tests", () => {
     });
   });
 
+  describe("Security Headers", () => {
+    it("should have Content-Security-Policy header with default-src 'none'", async () => {
+      const response = await request(app).get("/api/health");
+
+      expect(response.status).toBe(200);
+      expect(response.headers["content-security-policy"]).toContain("default-src 'none'");
+    });
+
+    it("should have X-Frame-Options header set to SAMEORIGIN", async () => {
+      const response = await request(app).get("/api/health");
+
+      expect(response.status).toBe(200);
+      expect(response.headers["x-frame-options"]).toBe("SAMEORIGIN");
+    });
+
+    it("should have Strict-Transport-Security header with max-age and includeSubDomains", async () => {
+      const response = await request(app).get("/api/health");
+
+      expect(response.status).toBe(200);
+      expect(response.headers["strict-transport-security"]).toContain("max-age=31536000");
+      expect(response.headers["strict-transport-security"]).toContain("includeSubDomains");
+      expect(response.headers["strict-transport-security"]).toContain("preload");
+    });
+
+    it("should have X-Content-Type-Options header set to nosniff", async () => {
+      const response = await request(app).get("/api/health");
+
+      expect(response.status).toBe(200);
+      expect(response.headers["x-content-type-options"]).toBe("nosniff");
+    });
+
+    it("should remove X-Powered-By header", async () => {
+      const response = await request(app).get("/api/health");
+
+      expect(response.status).toBe(200);
+      expect(response.headers["x-powered-by"]).toBeUndefined();
+    });
+  });
+
   describe("Stream Lifecycle", () => {
     const validSender = Keypair.random().publicKey();
     const validRecipient = Keypair.random().publicKey();

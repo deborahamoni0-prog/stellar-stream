@@ -394,6 +394,7 @@ td {
 .progress-bar>div {
   height: 100%;
   background: #0ea5a5;
+  transition: width 0.3s ease-in-out;
 }
 
 .badge {
