@@ -22,6 +22,7 @@ import {
   ApiError,
   cancelStream,
   createStream,
+  getWebSocketUrl,
   listOpenIssues,
   listStreams,
   pauseStream,
@@ -57,12 +58,14 @@ function App() {
   const [hasMore, setHasMore] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
 
-  const wsUrl = import.meta.env.VITE_WS_URL ?? "";
+  const wsUrl = getWebSocketUrl();
   const { lastMessage } = useWebSocket<{
     eventType?: string;
     type?: string;
     status?: string;
     streamId?: string;
+    vestedAmount?: number;
+    percentComplete?: number;
   }>(wsUrl);
 
   const metricsHistory = useMetricsHistory("7d");
@@ -163,19 +166,36 @@ function App() {
 
   useEffect(() => {
     if (!lastMessage) return;
-    const eventKind = lastMessage.eventType ?? lastMessage.type ?? "";
+    const eventKind = lastMessage.type ?? "";
     if (!eventKind) return;
 
-    if (eventKind.includes("created")) {
-      showToast("Stream created", "success");
-    } else if (eventKind.includes("cancel")) {
-      showToast("Stream canceled", "info");
-    } else if (eventKind.includes("complete")) {
-      showToast("Stream completed", "success");
-    }
+    if (eventKind === "stream_progress") {
+      setStreams((prev) =>
+        prev.map((stream) =>
+          stream.id === lastMessage.streamId
+            ? {
+                ...stream,
+                progress: {
+                  ...stream.progress,
+                  vestedAmount: lastMessage.vestedAmount ?? stream.progress.vestedAmount,
+                  percentComplete: lastMessage.percentComplete ?? stream.progress.percentComplete,
+                },
+              }
+            : stream,
+        ),
+      );
+    } else {
+      if (eventKind.includes("created")) {
+        showToast("Stream created", "success");
+      } else if (eventKind.includes("cancel")) {
+        showToast("Stream canceled", "info");
+      } else if (eventKind.includes("complete")) {
+        showToast("Stream completed", "success");
+      }
 
-    void refreshStreams(apiFilters);
-    void refreshUnfilteredCount();
+      void refreshStreams(apiFilters);
+      void refreshUnfilteredCount();
+    }
   }, [apiFilters, lastMessage, showToast]);
 
   async function handleCreate(

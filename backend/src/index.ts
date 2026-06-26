@@ -6,7 +6,9 @@ import express, { NextFunction, Request, Response } from "express";
 import rateLimit from "express-rate-limit";
 import swaggerUi from "swagger-ui-express";
 import { z } from "zod";
+import { createServer } from "http";
 import { searchStreamsFts } from "./services/db";
+import { initWebSocket } from "./services/websocket";
 import {
   normalizeUnknownApiError,
   sendApiError,
@@ -34,6 +36,7 @@ import { getStreamStats } from "./services/stats";
 
 import { startReconciliationJob } from "./services/reconciliationJob";
 import { startArchiveJob } from "./services/archiveJob";
+import { startStreamProgressBroadcaster } from "./services/streamProgressBroadcaster";
 import { startWebhookWorker } from "./services/webhookWorker";
 import {
   getDeadLetters,
@@ -1742,8 +1745,13 @@ async function startServer() {
   }
 
   startArchiveJob(config.archiveCronIntervalMs);
-  app.listen(config.port, () => {
-    logger.info({ port: config.port }, "StellarStream API listening");
+  startStreamProgressBroadcaster(5000);
+
+  const server = createServer(app);
+  initWebSocket(server);
+
+  server.listen(config.port, () => {
+    logger.info({ port: config.port }, "StellarStream API listening with WebSocket support");
   });
 }
 

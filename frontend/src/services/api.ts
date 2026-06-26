@@ -12,6 +12,14 @@ const DEFAULT_STALE_AFTER_MS = 4000;
 
 const API_BASE = import.meta.env.VITE_API_URL ?? "/api";
 
+export function getWebSocketUrl(): string {
+  // Construct WebSocket URL from API base URL
+  const apiUrl = import.meta.env.VITE_API_URL || window.location.origin + "/api";
+  const wsProtocol = apiUrl.startsWith("https") ? "wss" : "ws";
+  const wsUrl = apiUrl.replace(/^https?:\/\//, "").replace(/\/api$/, "");
+  return `${wsProtocol}://${wsUrl}/api/ws`;
+}
+
 let authToken: string | null = null;
 export function setAuthToken(token: string | null) {
   authToken = token;
