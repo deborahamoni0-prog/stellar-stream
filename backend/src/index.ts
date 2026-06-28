@@ -283,7 +283,6 @@ app.use(helmet({
     preload: true,
   },
 }));
-app.use(cors());
 const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS;
 
 if (ALLOWED_ORIGINS) {
