@@ -1,6 +1,7 @@
 import cors from "cors";
 import helmet from "helmet";
 import { requestLogger } from "./middleware/requestLogger";
+import { requireJsonContentType } from "./middleware/contentType";
 import "dotenv/config";
 import express, { NextFunction, Request, Response } from "express";
 import rateLimit from "express-rate-limit";
@@ -316,6 +317,7 @@ if (ALLOWED_ORIGINS) {
   app.use(cors());
 }
 app.use(requestLogger);
+app.use(requireJsonContentType);
 app.use(
   express.json({
     limit: "32kb",
