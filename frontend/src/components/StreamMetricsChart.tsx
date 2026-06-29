@@ -1,6 +1,8 @@
 import {
   Area,
   AreaChart,
+  Bar,
+  BarChart,
   CartesianGrid,
   Legend,
   ResponsiveContainer,
@@ -9,27 +11,80 @@ import {
   YAxis,
   ReferenceArea,
 } from "recharts";
-import { useState, useRef, useMemo, useCallback } from "react";
+import { useState, useRef, useMemo, useCallback, useEffect } from "react";
 import { MetricsSnapshot } from "../hooks/useMetricsHistory";
+import { fetchStats, StreamStats } from "../services/api";
 
 interface StreamMetricsChartProps {
   data: MetricsSnapshot[];
+  loading?: boolean;
+  error?: Error | null;
 }
 
-function formatTime(timestamp: number): string {
-  const date = new Date(timestamp);
-  return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+/** Format a unix-ms timestamp as a short date label (e.g. "Jun 24"). */
+function formatDate(timestamp: number): string {
+  return new Date(timestamp).toLocaleDateString([], {
+    month: "short",
+    day: "numeric",
+  });
 }
 
-export function StreamMetricsChart({ data }: StreamMetricsChartProps) {
+export function StreamMetricsChart({ data, loading = false, error = null }: StreamMetricsChartProps) {
   const [zoomRange, setZoomRange] = useState<[number, number] | null>(null);
   const [interactionMode, setInteractionMode] = useState<"pan" | "zoom">("pan");
   const [refAreaLeft, setRefAreaLeft] = useState<string | null>(null);
   const [refAreaRight, setRefAreaRight] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
+  const [stats, setStats] = useState<StreamStats | null>(null);
+  const [statsLoading, setStatsLoading] = useState(true);
+  const [statsError, setStatsError] = useState<Error | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<{ startX: number; startRange: [number, number]; active: boolean } | null>(null);
   const pinchRef = useRef<{ startDist: number; startRange: [number, number] } | null>(null);
+
+  useEffect(() => {
+    let mounted = true;
+
+    async function loadStats() {
+      if (!mounted) return;
+      try {
+        setStatsError(null);
+        const statsData = await fetchStats();
+        if (mounted) {
+          setStats(statsData);
+          setStatsLoading(false);
+        }
+      } catch (err) {
+        if (mounted) {
+          setStatsError(err as Error);
+          setStatsLoading(false);
+        }
+      }
+    }
+
+    loadStats();
+
+    const interval = setInterval(loadStats, 60000);
+
+    return () => {
+      mounted = false;
+      clearInterval(interval);
+    };
+  }, []);
+
+  const handleRetry = () => {
+    setStatsLoading(true);
+    setStatsError(null);
+    fetchStats()
+      .then((statsData) => {
+        setStats(statsData);
+        setStatsLoading(false);
+      })
+      .catch((err) => {
+        setStatsError(err as Error);
+        setStatsLoading(false);
+      });
+  };
 
   const maxIndex = Math.max(0, data.length - 1);
   const currentRange = zoomRange || [0, maxIndex];
@@ -38,10 +93,10 @@ export function StreamMetricsChart({ data }: StreamMetricsChartProps) {
     return data.slice(Math.max(0, currentRange[0]), Math.min(data.length, currentRange[1] + 1));
   }, [data, currentRange]);
 
-  const visibleMinutes = useMemo(() => {
-    if (currentData.length < 2) return 1;
-    const diffMs = currentData[currentData.length - 1].timestamp - currentData[0].timestamp;
-    return Math.max(1, Math.round(diffMs / 60000));
+  const visibleDateRange = useMemo(() => {
+    if (currentData.length === 0) return "";
+    if (currentData.length === 1) return formatDate(currentData[0].timestamp);
+    return `${formatDate(currentData[0].timestamp)} – ${formatDate(currentData[currentData.length - 1].timestamp)}`;
   }, [currentData]);
 
   const zoomInOut = useCallback((factor: number) => {
@@ -53,8 +108,8 @@ export function StreamMetricsChart({ data }: StreamMetricsChartProps) {
       const newLength = Math.max(1, Math.round(length / factor));
       const center = range[0] + length / 2;
       
-      let newStart = Math.round(center - newLength / 2);
-      let newEnd = Math.round(center + newLength / 2);
+      const newStart = Math.round(center - newLength / 2);
+      const newEnd = Math.round(center + newLength / 2);
       
       return [Math.max(0, newStart), Math.min(maxIndex, newEnd)];
     });
@@ -134,8 +189,8 @@ export function StreamMetricsChart({ data }: StreamMetricsChartProps) {
       const newLength = Math.max(1, Math.round(length / factor));
       const center = startRange[0] + length / 2;
       
-      let newStart = Math.round(center - newLength / 2);
-      let newEnd = Math.round(center + newLength / 2);
+      const newStart = Math.round(center - newLength / 2);
+      const newEnd = Math.round(center + newLength / 2);
       
       setZoomRange([Math.max(0, newStart), Math.min(maxIndex, newEnd)]);
     }
@@ -144,6 +199,46 @@ export function StreamMetricsChart({ data }: StreamMetricsChartProps) {
   const handleTouchEnd = () => {
     pinchRef.current = null;
   };
+
+  if (loading || statsLoading) {
+    return (
+      <div className="chart-empty-state" aria-live="polite" aria-busy="true">
+        <div className="chart-empty-state__content">
+          <span className="chart-empty-state__icon">⏳</span>
+          <h3>Loading Chart Data</h3>
+          <p>Fetching metrics history…</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (error || statsError) {
+    return (
+      <div className="chart-empty-state" role="alert">
+        <div className="chart-empty-state__content">
+          <span className="chart-empty-state__icon">⚠️</span>
+          <h3>Failed to Load Chart</h3>
+          <p>{error?.message || statsError?.message || "An error occurred while fetching metrics history."}</p>
+          {statsError && (
+            <button
+              onClick={handleRetry}
+              style={{
+                marginTop: "1rem",
+                padding: "0.5rem 1rem",
+                backgroundColor: "#3b82f6",
+                color: "#f9fafb",
+                border: "none",
+                borderRadius: "0.25rem",
+                cursor: "pointer",
+              }}
+            >
+              Retry
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   if (data.length === 0) {
     return (
@@ -158,11 +253,17 @@ export function StreamMetricsChart({ data }: StreamMetricsChartProps) {
   }
 
   const chartData = currentData.map((snapshot) => ({
-    time: formatTime(snapshot.timestamp),
+    date: formatDate(snapshot.timestamp),
     Active: snapshot.active,
     Completed: snapshot.completed,
     "Vested Amount": snapshot.vested,
   }));
+
+  const barChartData = stats ? [
+    { name: "Active", count: stats.active_streams },
+    { name: "Completed", count: stats.completed_streams },
+    { name: "Canceled", count: stats.canceled_streams },
+  ] : [];
 
   return (
     <div className="chart-container" style={{ position: "relative" }}>
@@ -176,7 +277,7 @@ export function StreamMetricsChart({ data }: StreamMetricsChartProps) {
         }}
       >
         <div style={{ color: "#9ca3af", fontSize: "0.875rem" }}>
-          Showing last {visibleMinutes} minutes
+          {visibleDateRange ? `Showing ${visibleDateRange}` : "Vested amount over time"}
         </div>
         <div style={{ display: "flex", gap: "0.5rem" }}>
           <button
@@ -239,6 +340,40 @@ export function StreamMetricsChart({ data }: StreamMetricsChartProps) {
         </div>
       </div>
 
+      {barChartData.length > 0 && (
+        <div style={{ marginBottom: "2rem" }}>
+          <h4 style={{ color: "#d1d5db", marginBottom: "0.5rem", fontSize: "0.875rem" }}>
+            Stream Counts by Status
+          </h4>
+          <ResponsiveContainer width="100%" height={200}>
+            <BarChart data={barChartData}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#374151" opacity={0.3} />
+              <XAxis
+                dataKey="name"
+                stroke="#9ca3af"
+                tick={{ fill: "#9ca3af", fontSize: 12 }}
+                tickLine={{ stroke: "#4b5563" }}
+              />
+              <YAxis
+                stroke="#9ca3af"
+                tick={{ fill: "#9ca3af", fontSize: 12 }}
+                tickLine={{ stroke: "#4b5563" }}
+              />
+              <Tooltip
+                contentStyle={{
+                  backgroundColor: "#1f2937",
+                  border: "1px solid #374151",
+                  borderRadius: "8px",
+                  color: "#f9fafb",
+                }}
+                labelStyle={{ color: "#d1d5db" }}
+              />
+              <Bar dataKey="count" fill="#3b82f6" />
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      )}
+
       <div
         ref={containerRef}
         style={{
@@ -266,8 +401,8 @@ export function StreamMetricsChart({ data }: StreamMetricsChartProps) {
           }}
           onMouseUp={() => {
             if (interactionMode === "zoom" && refAreaLeft && refAreaRight) {
-              const startIndex = currentData.findIndex(d => formatTime(d.timestamp) === refAreaLeft);
-              const endIndex = currentData.findIndex(d => formatTime(d.timestamp) === refAreaRight);
+              const startIndex = currentData.findIndex(d => formatDate(d.timestamp) === refAreaLeft);
+              const endIndex = currentData.findIndex(d => formatDate(d.timestamp) === refAreaRight);
               if (startIndex !== -1 && endIndex !== -1) {
                 const start = Math.min(startIndex, endIndex);
                 const end = Math.max(startIndex, endIndex);
@@ -301,7 +436,7 @@ export function StreamMetricsChart({ data }: StreamMetricsChartProps) {
           </defs>
           <CartesianGrid strokeDasharray="3 3" stroke="#374151" opacity={0.3} />
           <XAxis
-            dataKey="time"
+            dataKey="date"
             stroke="#9ca3af"
             tick={{ fill: "#9ca3af", fontSize: 12 }}
             tickLine={{ stroke: "#4b5563" }}

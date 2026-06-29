@@ -10,6 +10,7 @@ import jwt from "jsonwebtoken";
 import crypto from "crypto";
 import { Request, Response, NextFunction } from "express";
 import { sendApiError } from "../apiErrors";
+import { logger } from "../logger";
 
 const HORIZON_URL = (process.env.HORIZON_URL || "https://horizon-testnet.stellar.org").trim();
 
@@ -44,8 +45,12 @@ if (!jwtSecret) {
 
   jwtSecret = crypto.randomBytes(32).toString("hex");
 
-  console.warn(
+  logger.warn(
     "JWT_SECRET not set — using ephemeral secret. All tokens will be invalidated on restart.",
+  );
+} else {
+  logger.warn(
+    "JWT_SECRET is configured. Rotating this secret will invalidate all existing tokens and force all users to re-authenticate.",
   );
 }
 

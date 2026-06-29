@@ -1,12 +1,33 @@
 import React from 'react';
-import { render, screen, waitFor, cleanup } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, cleanup } from '@testing-library/react';
 import '@testing-library/jest-dom';
 import userEvent from '@testing-library/user-event';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { estimateCreateStreamFee, getConfig } from '../services/api';
 import { CreateStreamForm } from '../components/CreateStreamForm';
 
 const VALID_ADDRESS_1 = 'GBX5ZID6H4G365G7O4W6U4E6U4E6U4E6U4E6U4E6U4E6U4E6U4E6U4E6';
 const VALID_ADDRESS_2 = 'GDBX5ZID6H4G365G7O4W6U4E6U4E6U4E6U4E6U4E6U4E6U4E6U4E6U4E';
+
+vi.mock('../services/api', () => ({
+  estimateCreateStreamFee: vi.fn(),
+  getConfig: vi.fn(),
+}));
+
+function fillValidStreamForm(amount = '100', duration = '60') {
+  fireEvent.change(screen.getByLabelText(/Sender Account/i), {
+    target: { value: VALID_ADDRESS_1 },
+  });
+  fireEvent.change(screen.getByLabelText(/Recipient Account/i), {
+    target: { value: VALID_ADDRESS_2 },
+  });
+  fireEvent.change(screen.getByLabelText(/Total Amount/i), {
+    target: { value: amount },
+  });
+  fireEvent.change(screen.getByLabelText(/Duration/i), {
+    target: { value: duration },
+  });
+}
 
 describe('CreateStreamForm Component', () => {
   afterEach(() => {
@@ -16,42 +37,65 @@ describe('CreateStreamForm Component', () => {
   beforeEach(() => {
     window.localStorage.clear();
     vi.clearAllMocks();
+    vi.mocked(getConfig).mockResolvedValue({ allowedAssets: ['USDC', 'XLM'] });
+    vi.mocked(estimateCreateStreamFee).mockResolvedValue({
+      feeStroops: 12345,
+      feeXlm: '0.0012345',
+    });
   });
 
   it('renders all required form fields', () => {
     render(<CreateStreamForm onCreate={vi.fn()} walletAddress={VALID_ADDRESS_1} />);
-    
+
     expect(screen.getByLabelText(/Sender Account/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/Recipient Account/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/Asset Code/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/Total Amount/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/Duration/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/Start In/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Cliff Period/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Create Stream/i })).toBeInTheDocument();
   });
 
-  it('enables submit button and calls onCreate when form is valid', async () => {
-    const user = userEvent.setup();
+  it('validates cliff period must be less than stream duration', async () => {
+    render(<CreateStreamForm onCreate={vi.fn()} walletAddress={VALID_ADDRESS_1} />);
+
+    const cliffInput = screen.getByLabelText(/Cliff Period/i);
+    fireEvent.change(cliffInput, { target: { value: '2' } });
+    // Duration is 1440 minutes = 1 day. Cliff of 2 days > 1 day duration
+    const durationInput = screen.getByLabelText(/Duration/i);
+    fireEvent.change(durationInput, { target: { value: '1440' } });
+    fireEvent.blur(cliffInput);
+
+    expect(screen.getByText(/Cliff must be less than the stream duration/i)).toBeInTheDocument();
+  });
+
+  it('previews the simulated fee before confirming a valid stream', async () => {
     const onCreate = vi.fn().mockResolvedValue(undefined);
     render(<CreateStreamForm onCreate={onCreate} walletAddress={VALID_ADDRESS_1} />);
 
-    // Fill out the form
-    await user.clear(screen.getByLabelText(/Sender Account/i));
-    await user.type(screen.getByLabelText(/Sender Account/i), VALID_ADDRESS_1);
-    
-    await user.clear(screen.getByLabelText(/Recipient Account/i));
-    await user.type(screen.getByLabelText(/Recipient Account/i), VALID_ADDRESS_2);
-    
-    await user.clear(screen.getByLabelText(/Total Amount/i));
-    await user.type(screen.getByLabelText(/Total Amount/i), '100');
-    
-    await user.clear(screen.getByLabelText(/Duration/i));
-    await user.type(screen.getByLabelText(/Duration/i), '60');
+    fillValidStreamForm();
 
     const submitButton = screen.getByRole('button', { name: /Create Stream/i });
     expect(submitButton).not.toBeDisabled();
     
-    await user.click(submitButton);
+    fireEvent.click(submitButton);
+
+    await waitFor(() => {
+      expect(estimateCreateStreamFee).toHaveBeenCalledWith(expect.objectContaining({
+        sender: VALID_ADDRESS_1,
+        recipient: VALID_ADDRESS_2,
+        totalAmount: 100,
+        durationSeconds: 3600,
+      }));
+    });
+    expect(onCreate).not.toHaveBeenCalled();
+    expect(await screen.findByText(/Network fee estimate/i)).toBeInTheDocument();
+    expect(screen.getByText('100 USDC')).toBeInTheDocument();
+    expect(screen.getByText('100.000000 USDC/hour')).toBeInTheDocument();
+    expect(screen.getByText('0.0012345 XLM')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /^Confirm$/i }));
 
     await waitFor(() => {
       expect(onCreate).toHaveBeenCalledWith(expect.objectContaining({
@@ -63,25 +107,26 @@ describe('CreateStreamForm Component', () => {
     });
   });
 
+  it('shows an inline error when fee simulation fails', async () => {
+    vi.mocked(estimateCreateStreamFee).mockRejectedValueOnce(new Error('RPC failed'));
+    render(<CreateStreamForm onCreate={vi.fn()} walletAddress={VALID_ADDRESS_1} />);
+
+    fillValidStreamForm();
+
+    fireEvent.click(screen.getByRole('button', { name: /Create Stream/i }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('RPC failed');
+  });
+
   it('shows error and disables submit when duration is less than 1 minute (60s)', async () => {
-    const user = userEvent.setup();
     render(<CreateStreamForm onCreate={vi.fn()} walletAddress={VALID_ADDRESS_1} />);
 
     const durationInput = screen.getByLabelText(/Duration/i);
-    await user.clear(durationInput);
-    await user.type(durationInput, '0');
-    await user.tab(); // trigger blur
-
-    // In CreateStreamForm, submitAttempted must be true or field must be touched for errors to show usually, 
-    // but here validateForm is called every render. 
-    // However, the button is disabled if (submitAttempted && !formValid) OR isSubmitting.
-    // Wait, the requirement says "assert inline error and submit disabled".
-    // Let's click submit first to set submitAttempted to true.
-    const submitButton = screen.getByRole('button', { name: /Create Stream/i });
-    await user.click(submitButton);
+    fireEvent.change(durationInput, { target: { value: '0' } });
+    fireEvent.blur(durationInput);
 
     expect(screen.getByText(/Duration must be at least 1 minute/i)).toBeInTheDocument();
-    await waitFor(() => expect(submitButton).toBeDisabled());
+    expect(screen.getByRole('button', { name: /Create Stream/i })).toBeDisabled();
   });
 
   it('shows error when total amount is 0 or negative', async () => {
@@ -96,7 +141,7 @@ describe('CreateStreamForm Component', () => {
     await user.click(submitButton);
 
     expect(screen.getByText(/greater than zero/i)).toBeInTheDocument();
-    await waitFor(() => expect(submitButton).toBeDisabled());
+    expect(submitButton).toBeDisabled();
   });
 
   it('shows error for invalid Stellar address format', async () => {
@@ -111,11 +156,10 @@ describe('CreateStreamForm Component', () => {
     await user.click(submitButton);
 
     expect(screen.getByText(/valid Stellar account ID/i)).toBeInTheDocument();
-    await waitFor(() => expect(submitButton).toBeDisabled());
+    expect(submitButton).toBeDisabled();
   });
 
   it('shows loading state during submission', async () => {
-    const user = userEvent.setup();
     // Create a promise that we can control
     let resolveSubmit: (value: void | PromiseLike<void>) => void;
     const onCreate = vi.fn().mockImplementation(() => new Promise((resolve) => {
@@ -124,19 +168,16 @@ describe('CreateStreamForm Component', () => {
     
     render(<CreateStreamForm onCreate={onCreate} walletAddress={VALID_ADDRESS_1} />);
 
-    // Fill valid data
-    await user.clear(screen.getByLabelText(/Sender Account/i));
-    await user.type(screen.getByLabelText(/Sender Account/i), VALID_ADDRESS_1);
-    await user.clear(screen.getByLabelText(/Recipient Account/i));
-    await user.type(screen.getByLabelText(/Recipient Account/i), VALID_ADDRESS_2);
+    fillValidStreamForm();
 
-    const submitButton = screen.getByRole('button', { name: /Create Stream/i });
-    await user.click(submitButton);
+    fireEvent.click(screen.getByRole('button', { name: /Create Stream/i }));
+    const confirmButton = await screen.findByRole('button', { name: /^Confirm$/i });
+    fireEvent.click(confirmButton);
 
     await waitFor(() => {
-      expect(submitButton).toBeDisabled();
-      expect(submitButton).toHaveTextContent(/Creating…/i);
-      expect(submitButton).toHaveAttribute('aria-busy', 'true');
+      expect(confirmButton).toBeDisabled();
+      expect(confirmButton).toHaveTextContent(/Creating/i);
+      expect(confirmButton).toHaveAttribute('aria-busy', 'true');
     });
 
     // Finish submission
@@ -145,8 +186,7 @@ describe('CreateStreamForm Component', () => {
     });
 
     await waitFor(() => {
-      expect(submitButton).not.toHaveTextContent(/Creating…/i);
-      expect(submitButton).not.toBeDisabled();
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     });
   });
 

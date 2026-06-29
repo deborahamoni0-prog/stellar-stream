@@ -11,30 +11,53 @@ declare global {
 }
 
 export function requestLogger(req: Request, res: Response, next: NextFunction) {
-  // ✅ STEP 1: Generate unique request ID for log correlation
-  const requestId = crypto.randomUUID();
+  // Validate and normalize x-request-id header
+  let requestId: string;
+  const headerValue = req.headers["x-request-id"];
+
+  if (Array.isArray(headerValue)) {
+    // Use the first value if multiple headers are sent
+    requestId = headerValue[0];
+  } else if (typeof headerValue === "string") {
+    requestId = headerValue;
+  } else {
+    requestId = crypto.randomUUID();
+  }
+
+  // Validate format: should be a UUID-like string, max 128 chars, alphanumeric + hyphens
+  const isValidId = /^[a-zA-Z0-9-]{1,128}$/.test(requestId);
+  if (!isValidId) {
+    requestId = crypto.randomUUID();
+  }
+
   req.requestId = requestId;
 
-  // ✅ STEP 2: Track request start time
+  const requestLogger = logger.child({ requestId });
+
   const start = Date.now();
 
-  // ✅ STEP 3: Log AFTER response is sent
-  res.on("finish", () => {
-    const duration = Date.now() - start;
+  res.setHeader("X-Request-ID", requestId);
 
-    // ✅ Required log data
+  res.on("finish", () => {
+    const durationMs = Date.now() - start;
+
     const logEntry = {
       requestId,
       method: req.method,
       route: req.originalUrl,
       statusCode: res.statusCode,
-      duration: `${duration}ms`,
+      durationMs,
     };
 
-    // ✅ STEP 4: Use structured logger with redaction
-    logger.info(logEntry, `${req.method} ${req.originalUrl} ${res.statusCode} - ${duration}ms | id=${requestId}`);
+    const message = "request completed";
+    if (res.statusCode >= 500) {
+      requestLogger.error(logEntry, message);
+    } else if (res.statusCode >= 400) {
+      requestLogger.warn(logEntry, message);
+    } else {
+      requestLogger.info(logEntry, message);
+    }
   });
 
-  // ✅ STEP 5: Continue request
   next();
 }

@@ -1,21 +1,38 @@
-import { reconcileMissingStreams } from "./streamStore";
+import { reconcileMissingStreams, getOnChainStreamCount } from "./streamStore";
+import { getDb } from "./db";
+import { logger } from "../logger";
 
 let reconciliationInterval: NodeJS.Timeout | null = null;
 let reconciliationInFlight = false;
 
 async function runReconciliationCycle(): Promise<void> {
   if (reconciliationInFlight) {
-    console.warn(
-      "[reconciliation] skipping cycle because a previous run is still in progress",
-    );
+    logger.warn("skipping reconciliation cycle because a previous run is still in progress");
     return;
   }
 
   reconciliationInFlight = true;
   try {
     await reconcileMissingStreams();
+    await checkStreamCountDiscrepancy();
   } finally {
     reconciliationInFlight = false;
+  }
+}
+
+async function checkStreamCountDiscrepancy(): Promise<void> {
+  const onChainCount = await getOnChainStreamCount();
+  if (onChainCount === null) return;
+
+  const db = getDb();
+  const row = db.prepare("SELECT COUNT(*) AS total FROM streams").get() as { total: number };
+  const localCount = row.total;
+
+  if (onChainCount !== localCount) {
+    logger.warn(
+      { onChainStreamCount: onChainCount, localStreamCount: localCount },
+      "stream count discrepancy detected between on-chain and local database",
+    );
   }
 }
 
@@ -24,18 +41,16 @@ export function startReconciliationJob(intervalMs = 60000): void {
     return;
   }
 
-  console.log(
-    `[reconciliation] starting reconciliation job with ${intervalMs}ms interval`,
-  );
+  logger.info({ intervalMs }, "reconciliation job started");
 
   reconciliationInterval = setInterval(() => {
     runReconciliationCycle().catch((err) => {
-      console.error("[reconciliation] job cycle failed:", err);
+      logger.error({ err }, "reconciliation job cycle failed");
     });
   }, intervalMs);
 
   runReconciliationCycle().catch((err) => {
-    console.error("[reconciliation] initial reconciliation failed:", err);
+    logger.error({ err }, "initial reconciliation failed");
   });
 }
 
@@ -46,5 +61,5 @@ export function stopReconciliationJob(): void {
 
   clearInterval(reconciliationInterval);
   reconciliationInterval = null;
-  console.log("[reconciliation] reconciliation job stopped");
+  logger.info("reconciliation job stopped");
 }

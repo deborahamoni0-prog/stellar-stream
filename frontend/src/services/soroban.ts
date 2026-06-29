@@ -8,10 +8,14 @@
  * builds, signs (fee-sponsored), and submits the Soroban `claim` transaction
  * on behalf of the recipient.  The backend returns the claimed amount and the
  * updated event history.
+ *
+ * To use the generated contract client directly (for read operations or
+ * wallet-signed transactions), import from `./contractClient`.
  */
 
 import { getAuthToken } from "./api";
 import type { StreamEvent } from "./api";
+import { CONTRACT_ID, RPC_URL, NETWORK_PASSPHRASE } from "./contractClient";
 
 const API_BASE = (import.meta as any).env?.VITE_API_URL ?? "/api";
 

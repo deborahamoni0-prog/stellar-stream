@@ -6,10 +6,18 @@ import {
   totalAmountSchema,
 } from "../validation/schemas";
 
+/**
+ * Validates if a string is a properly formatted Stellar account ID.
+ * @param value - The account ID string to validate.
+ * @returns True if valid, false otherwise.
+ */
 export function isStellarAccount(value: string): boolean {
   return STELLAR_ACCOUNT_REGEX.test(value.trim());
 }
 
+/**
+ * Represents validation errors for each field in the stream creation form.
+ */
 export interface FieldErrors {
   sender?: string;
   recipient?: string;
@@ -17,8 +25,12 @@ export interface FieldErrors {
   totalAmount?: string;
   durationMinutes?: string;
   startInMinutes?: string;
+  cliffDays?: string;
 }
 
+/**
+ * Represents the raw string values from the stream creation form.
+ */
 export interface FormValues {
   sender: string;
   recipient: string;
@@ -26,8 +38,14 @@ export interface FormValues {
   totalAmount: string;
   durationMinutes: string;
   startInMinutes: string;
+  cliffDays: string;
 }
 
+/**
+ * Validates the stream creation form values against business rules and schemas.
+ * @param values - The form values to validate.
+ * @returns An object containing error messages for any invalid fields.
+ */
 export function validateForm(values: FormValues): FieldErrors {
   const errors: FieldErrors = {};
 
@@ -107,6 +125,21 @@ export function validateForm(values: FormValues): FieldErrors {
     errors.startInMinutes = "Enter 0 to start immediately, or a positive number of minutes.";
   } else if (!Number.isInteger(startNum) || startNum < 0) {
     errors.startInMinutes = "Must be 0 or a positive whole number.";
+  }
+
+  // --- Cliff period (optional, defaults to 0) ---
+  const cliffDaysStr = values.cliffDays?.trim() ?? "";
+  if (cliffDaysStr !== "" && cliffDaysStr !== "0") {
+    const cliffNum = Number(cliffDaysStr);
+    if (isNaN(cliffNum) || cliffNum < 0) {
+      errors.cliffDays = "Cliff must be 0 or a positive number.";
+    } else {
+      const cliffSeconds = cliffNum * 86400;
+      const durationSeconds = durationNum * 60;
+      if (!isNaN(durationNum) && durationNum >= 1 && cliffSeconds >= durationSeconds) {
+        errors.cliffDays = "Cliff must be less than the stream duration.";
+      }
+    }
   }
 
   return errors;

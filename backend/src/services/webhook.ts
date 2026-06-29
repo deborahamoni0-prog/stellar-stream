@@ -1,5 +1,6 @@
 import { createHmac } from "crypto";
 import { getDb } from "./db";
+import { logger } from "../logger";
 import { validateWebhookUrl } from "./webhookUrl";
 
 export { validateWebhookUrl } from "./webhookUrl";
@@ -15,20 +16,20 @@ export const triggerWebhook = async (event: string, data: any): Promise<void> =>
   const url = process.env.WEBHOOK_DESTINATION_URL;
 
   if (!url) {
-    console.log(`[Webhook] Skipping ${event}: WEBHOOK_DESTINATION_URL not set.`);
+    logger.info({ event }, "webhook skipped because destination URL is not set");
     return;
   }
 
   const urlValidation = validateWebhookUrl(url);
   if (!urlValidation.valid) {
-    console.error(`[Webhook] Skipping ${event}: ${urlValidation.reason}.`);
+    logger.error({ event, reason: urlValidation.reason }, "webhook skipped because destination URL is invalid");
     return;
   }
 
   const streamId = data.stream_id || data.id;
 
   if (!streamId) {
-    console.error(`[Webhook] Cannot map event ${event} to a stream ID. Data:`, data);
+    logger.error({ event, data }, "webhook event could not be mapped to a stream ID");
     return;
   }
 
@@ -51,9 +52,9 @@ export const triggerWebhook = async (event: string, data: any): Promise<void> =>
       now, // next_retry_at
       now // created_at
     );
-    console.log(`[Webhook] Queued ${event} for stream ${streamId}.`);
+    logger.info({ event, streamId }, "webhook delivery queued");
   } catch (error: any) {
-    console.error(`[Webhook] Failed to queue webhook event ${event}:`, error);
+    logger.error({ err: error, event }, "failed to queue webhook event");
   }
 };
 

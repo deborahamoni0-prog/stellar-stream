@@ -21,8 +21,16 @@ export function initDb(): void {
   }
 
   db = new Database(DB_PATH);
+  // WAL mode: better concurrency, allows readers and writers in parallel
   db.pragma("journal_mode = WAL");
+  // Foreign keys: enforce referential integrity
   db.pragma("foreign_keys = ON");
+  // Balanced durability/performance: fsync on commit but not every write
+  db.pragma("synchronous = NORMAL");
+  // Prevent SQLITE_BUSY errors during concurrent writes by waiting up to 5 seconds
+  db.pragma("busy_timeout = 5000");
+  // 64MB page cache for improved read performance
+  db.pragma("cache_size = -64000");
 
   migrate();
 }
@@ -116,6 +124,15 @@ function migrate(): void {
       id INTEGER PRIMARY KEY CHECK (id = 1),
       last_ledger_sequence INTEGER NOT NULL
     );
+
+    CREATE VIRTUAL TABLE IF NOT EXISTS streams_fts USING fts5(
+      stream_id UNINDEXED,
+      sender,
+      recipient,
+      asset_code,
+      content=streams,
+      content_rowid=rowid
+    );
   `);
 
   // Incremental migrations — safe to run on existing databases.
@@ -128,8 +145,45 @@ function migrate(): void {
 
   addColumnIfMissing("streams", "paused_at", "INTEGER");
   addColumnIfMissing("streams", "paused_duration", "INTEGER NOT NULL DEFAULT 0");
+  addColumnIfMissing("streams", "metadata", "TEXT");
+  addColumnIfMissing("streams", "cliff_seconds", "INTEGER NOT NULL DEFAULT 0");
   addColumnIfMissing("stream_archive", "paused_at", "INTEGER");
   addColumnIfMissing("stream_archive", "paused_duration", "INTEGER NOT NULL DEFAULT 0");
+  addColumnIfMissing("stream_archive", "metadata", "TEXT");
+  addColumnIfMissing("stream_archive", "cliff_seconds", "INTEGER NOT NULL DEFAULT 0");
   addColumnIfMissing("webhook_dead_letters", "stream_id", "TEXT NOT NULL DEFAULT ''");
   addColumnIfMissing("webhook_dead_letters", "event", "TEXT NOT NULL DEFAULT ''");
+
+  // Rebuild FTS5 index if it exists (for production data)
+  try {
+    db.exec("INSERT INTO streams_fts(streams_fts, rank) VALUES('rebuild', -1)");
+  } catch {
+    // FTS table may not exist or rebuild may not be needed; continue
+  }
+}
+
+export function syncFtsIndex(streamId: string, sender: string, recipient: string, assetCode: string): void {
+  try {
+    db.prepare(
+      `INSERT INTO streams_fts(rowid, stream_id, sender, recipient, asset_code)
+       VALUES ((SELECT rowid FROM streams WHERE id = ?), ?, ?, ?, ?)
+       ON CONFLICT(rowid) DO UPDATE SET
+         sender = excluded.sender,
+         recipient = excluded.recipient,
+         asset_code = excluded.asset_code`
+    ).run(streamId, streamId, sender, recipient, assetCode);
+  } catch {
+    // FTS update failed; log but don't crash
+  }
+}
+
+export function searchStreamsFts(query: string): string[] {
+  try {
+    const rows = db.prepare(
+      `SELECT stream_id FROM streams_fts WHERE streams_fts MATCH ? ORDER BY rank`
+    ).all(query) as Array<{ stream_id: string }>;
+    return rows.map((row) => row.stream_id);
+  } catch {
+    return [];
+  }
 }

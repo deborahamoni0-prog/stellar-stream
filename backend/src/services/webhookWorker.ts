@@ -1,8 +1,9 @@
 import axios from "axios";
 import { getDb } from "./db";
 import { getRetryDelaySeconds } from "./webhook";
-
-
+import { getWebhookHeaders } from "./webhookSignature";
+import { validateWebhookUrl } from "./webhookUrl";
+import { logger } from "../logger";
 
 let isProcessing = false;
 let pollingInterval: NodeJS.Timeout | null = null;
@@ -20,7 +21,7 @@ export const processWebhookQueue = async () => {
 
     const urlValidation = validateWebhookUrl(url);
     if (!urlValidation.valid) {
-      console.error(`[WebhookWorker] Skipping delivery: ${urlValidation.reason}.`);
+      logger.error({ reason: urlValidation.reason }, "webhook delivery skipped because destination URL is invalid");
       isProcessing = false;
       return;
     }
@@ -61,7 +62,7 @@ export const processWebhookQueue = async () => {
         success = true;
       } catch (error: any) {
         errorMsg = error.message || "Unknown error";
-        console.error(`[WebhookWorker] Delivery attempt ${attempt + 1} failed for delivery ${id}:`, errorMsg);
+        logger.error({ err: error, deliveryId: id, attempt: attempt + 1 }, "webhook delivery attempt failed");
       }
 
       const updateNow = Math.floor(Date.now() / 1000);
@@ -71,7 +72,7 @@ export const processWebhookQueue = async () => {
         db.prepare(
           `UPDATE webhook_deliveries SET status = 'success', last_attempt_at = ? WHERE id = ?`
         ).run(updateNow, id);
-        console.log(`[WebhookWorker] Delivery ${id} (${event}) succeeded.`);
+        logger.info({ deliveryId: id, event }, "webhook delivery succeeded");
       } else {
         // Handle failure and retries
         const newAttempt = attempt + 1;
@@ -85,7 +86,7 @@ export const processWebhookQueue = async () => {
           db.prepare(
             `DELETE FROM webhook_deliveries WHERE id = ?`
           ).run(id);
-          console.error(`[WebhookWorker] Delivery ${id} (${event}) permanently failed after max attempts. Moved to dead-letter storage.`);
+          logger.error({ deliveryId: id, event, maxAttempts: max_attempts }, "webhook delivery moved to dead-letter storage");
         } else {
           // Use configured retry delays: 5s, 15s, 60s, 300s, 900s
           const delaySeconds = getRetryDelaySeconds(newAttempt - 1);
@@ -94,12 +95,15 @@ export const processWebhookQueue = async () => {
           db.prepare(
             `UPDATE webhook_deliveries SET attempt = ?, last_attempt_at = ?, next_retry_at = ?, error_message = ? WHERE id = ?`
           ).run(newAttempt, updateNow, nextRetry, errorMsg, id);
-          console.log(`[WebhookWorker] Delivery ${id} scheduled for retry in ${delaySeconds}s at ${new Date(nextRetry * 1000).toISOString()}`);
+          logger.info(
+            { deliveryId: id, event, attempt: newAttempt, delaySeconds, nextRetryAt: new Date(nextRetry * 1000).toISOString() },
+            "webhook delivery scheduled for retry",
+          );
         }
       }
     }
   } catch (err: any) {
-    console.error("[WebhookWorker] Error processing queue:", err);
+    logger.error({ err }, "error processing webhook queue");
   } finally {
     isProcessing = false;
   }
@@ -113,13 +117,13 @@ export const startWebhookWorker = (intervalMs: number = 5000) => {
   processWebhookQueue();
   // Set interval
   pollingInterval = setInterval(processWebhookQueue, intervalMs);
-  console.log(`[WebhookWorker] Started with ${intervalMs}ms interval.`);
+  logger.info({ intervalMs }, "webhook worker started");
 };
 
 export const stopWebhookWorker = () => {
   if (pollingInterval) {
     clearInterval(pollingInterval);
     pollingInterval = null;
-    console.log("[WebhookWorker] Stopped.");
+    logger.info("webhook worker stopped");
   }
 };

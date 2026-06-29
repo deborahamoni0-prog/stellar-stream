@@ -2,7 +2,10 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import request from "supertest";
 import { app } from "./index";
 import { initDb, getDb } from "./services/db";
+import { initCache, getCache } from "./services/cache";
 import { Keypair } from "@stellar/stellar-sdk";
+import jwt from "jsonwebtoken";
+import { getJwtSecret } from "./services/auth";
 import path from "path";
 import fs from "fs";
 
@@ -37,16 +40,18 @@ describe("Backend Integration Tests", () => {
     // Set test database path
     process.env.DB_PATH = TEST_DB_PATH;
 
-    // Initialize database
+    // Initialize database and cache
     initDb();
+    initCache();
   });
 
-  beforeEach(() => {
-    // Clean database before each test
+  beforeEach(async () => {
+    // Clean database and cache before each test
     const db = getDb();
     db.exec("DELETE FROM stream_events");
     db.exec("DELETE FROM webhook_deliveries");
     db.exec("DELETE FROM streams");
+    await getCache().clear();
   });
 
   afterAll(() => {
@@ -69,6 +74,45 @@ describe("Backend Integration Tests", () => {
         status: "ok",
       });
       expect(response.body.timestamp).toBeDefined();
+    });
+  });
+
+  describe("Security Headers", () => {
+    it("should have Content-Security-Policy header with default-src 'none'", async () => {
+      const response = await request(app).get("/api/health");
+
+      expect(response.status).toBe(200);
+      expect(response.headers["content-security-policy"]).toContain("default-src 'none'");
+    });
+
+    it("should have X-Frame-Options header set to SAMEORIGIN", async () => {
+      const response = await request(app).get("/api/health");
+
+      expect(response.status).toBe(200);
+      expect(response.headers["x-frame-options"]).toBe("SAMEORIGIN");
+    });
+
+    it("should have Strict-Transport-Security header with max-age and includeSubDomains", async () => {
+      const response = await request(app).get("/api/health");
+
+      expect(response.status).toBe(200);
+      expect(response.headers["strict-transport-security"]).toContain("max-age=31536000");
+      expect(response.headers["strict-transport-security"]).toContain("includeSubDomains");
+      expect(response.headers["strict-transport-security"]).toContain("preload");
+    });
+
+    it("should have X-Content-Type-Options header set to nosniff", async () => {
+      const response = await request(app).get("/api/health");
+
+      expect(response.status).toBe(200);
+      expect(response.headers["x-content-type-options"]).toBe("nosniff");
+    });
+
+    it("should remove X-Powered-By header", async () => {
+      const response = await request(app).get("/api/health");
+
+      expect(response.status).toBe(200);
+      expect(response.headers["x-powered-by"]).toBeUndefined();
     });
   });
 
@@ -232,6 +276,130 @@ describe("Backend Integration Tests", () => {
         expect(response.body.limit).toBe(2);
         expect(response.body.total).toBe(5);
         expect(response.body.data).toHaveLength(2);
+      });
+
+      it("should soft-delete stream and exclude from default list", async () => {
+        process.env.ADMIN_API_KEY = "test-admin-key";
+
+        const deleteResponse = await request(app)
+          .delete("/api/streams/1")
+          .set("X-Admin-Key", "test-admin-key");
+
+        expect(deleteResponse.status).toBe(204);
+
+        // Verify stream is not in default list
+        const listResponse = await request(app).get("/api/streams");
+        expect(listResponse.status).toBe(200);
+        expect(listResponse.body.data).toHaveLength(0);
+
+        // Verify stream appears with includeArchived=true
+        const archivedListResponse = await request(app)
+          .get("/api/streams")
+          .query({ include_archived: "true" });
+        expect(archivedListResponse.status).toBe(200);
+        expect(archivedListResponse.body.data).toHaveLength(1);
+        expect(archivedListResponse.body.data[0].id).toBe("1");
+        expect(archivedListResponse.body.data[0].archivedAt).toBeDefined();
+      });
+
+      it("should return 404 when deleting non-existent stream", async () => {
+        process.env.ADMIN_API_KEY = "test-admin-key";
+
+        const deleteResponse = await request(app)
+          .delete("/api/streams/999")
+          .set("X-Admin-Key", "test-admin-key");
+
+        expect(deleteResponse.status).toBe(404);
+        expect(deleteResponse.body.code).toBe("NOT_FOUND");
+      });
+
+      it("should return 404 when deleting already archived stream", async () => {
+        process.env.ADMIN_API_KEY = "test-admin-key";
+
+        // First delete
+        await request(app)
+          .delete("/api/streams/1")
+          .set("X-Admin-Key", "test-admin-key");
+
+        // Try to delete again
+        const deleteResponse = await request(app)
+          .delete("/api/streams/1")
+          .set("X-Admin-Key", "test-admin-key");
+
+        expect(deleteResponse.status).toBe(404);
+        expect(deleteResponse.body.code).toBe("NOT_FOUND");
+      });
+
+      it("should require admin auth for delete", async () => {
+        const deleteResponse = await request(app).delete("/api/streams/1");
+
+        expect(deleteResponse.status).toBe(401);
+      });
+
+      it("should paginate stream history with page and pageSize", async () => {
+        const db = getDb();
+        const now = Math.floor(Date.now() / 1000);
+
+        // Insert 25 events for the stream
+        for (let i = 1; i <= 25; i++) {
+          db.prepare(`
+            INSERT INTO stream_events (stream_id, event_type, timestamp, actor, amount)
+            VALUES (?, ?, ?, ?, ?)
+          `).run("1", "claimed", now - i, mockStream.sender, 100 + i);
+        }
+
+        // Request first page with pageSize 10
+        const page1Response = await request(app)
+          .get("/api/streams/1/history")
+          .query({ page: 1, pageSize: 10 });
+
+        expect(page1Response.status).toBe(200);
+        expect(page1Response.body.data).toHaveLength(10);
+        expect(page1Response.body.page).toBe(1);
+        expect(page1Response.body.pageSize).toBe(10);
+        expect(page1Response.body.total).toBe(25);
+        expect(page1Response.body.hasMore).toBe(true);
+
+        // Request second page
+        const page2Response = await request(app)
+          .get("/api/streams/1/history")
+          .query({ page: 2, pageSize: 10 });
+
+        expect(page2Response.status).toBe(200);
+        expect(page2Response.body.data).toHaveLength(10);
+        expect(page2Response.body.page).toBe(2);
+        expect(page2Response.body.hasMore).toBe(true);
+
+        // Request third page (last page with 5 items)
+        const page3Response = await request(app)
+          .get("/api/streams/1/history")
+          .query({ page: 3, pageSize: 10 });
+
+        expect(page3Response.status).toBe(200);
+        expect(page3Response.body.data).toHaveLength(5);
+        expect(page3Response.body.hasMore).toBe(false);
+
+        // Verify events are ordered by timestamp DESC (newest first)
+        const timestamps = page1Response.body.data.map((e: any) => e.timestamp);
+        for (let i = 1; i < timestamps.length; i++) {
+          expect(timestamps[i]).toBeLessThanOrEqual(timestamps[i - 1]);
+        }
+      });
+
+      it("should enforce max pageSize of 100", async () => {
+        const response = await request(app)
+          .get("/api/streams/1/history")
+          .query({ page: 1, pageSize: 200 });
+
+        expect(response.status).toBe(200);
+        expect(response.body.pageSize).toBe(100);
+      });
+
+      it("should use default pageSize of 20 when not specified", async () => {
+        const response = await request(app).get("/api/streams/1/history");
+
+        expect(response.status).toBe(200);
+        expect(response.body.pageSize).toBe(20);
       });
 
       describe("pagination and filter combinations", () => {
@@ -406,6 +574,143 @@ describe("Backend Integration Tests", () => {
 
         expect(response.status).toBe(400);
         expect(response.body.error).toContain("limit must be less than or equal to 100");
+      });
+
+      describe("sort and order", () => {
+        const senderAlpha = "G" + "A".repeat(55);
+        const recipientAlpha = "G" + "B".repeat(55);
+
+        function seedSortableStreams() {
+          const db = getDb();
+          db.exec("DELETE FROM streams");
+          const now = Math.floor(Date.now() / 1000);
+          const insert = db.prepare(`
+            INSERT INTO streams (id, sender, recipient, asset_code, total_amount, duration_seconds, start_at, created_at)
+            VALUES (@id, @sender, @recipient, @assetCode, @totalAmount, @durationSeconds, @startAt, @createdAt)
+          `);
+
+          // Stream A: smallest totalAmount, earliest startAt, earliest createdAt, shortest duration
+          insert.run({ id: "1", sender: senderAlpha, recipient: recipientAlpha, assetCode: "USDC", totalAmount: 100, durationSeconds: 100, startAt: now - 300, createdAt: now - 300 });
+          // Stream B: middle values
+          insert.run({ id: "2", sender: senderAlpha, recipient: recipientAlpha, assetCode: "USDC", totalAmount: 500, durationSeconds: 500, startAt: now - 200, createdAt: now - 200 });
+          // Stream C: largest totalAmount, latest startAt, latest createdAt, longest duration
+          insert.run({ id: "3", sender: senderAlpha, recipient: recipientAlpha, assetCode: "USDC", totalAmount: 1000, durationSeconds: 1000, startAt: now - 100, createdAt: now - 100 });
+        }
+
+        it("should sort by totalAmount asc", async () => {
+          seedSortableStreams();
+          const response = await request(app)
+            .get("/api/streams")
+            .query({ sort: "totalAmount", order: "asc" });
+          expect(response.status).toBe(200);
+          const amounts = response.body.data.map((s: any) => s.totalAmount);
+          expect(amounts).toEqual([100, 500, 1000]);
+        });
+
+        it("should sort by totalAmount desc", async () => {
+          seedSortableStreams();
+          const response = await request(app)
+            .get("/api/streams")
+            .query({ sort: "totalAmount", order: "desc" });
+          expect(response.status).toBe(200);
+          const amounts = response.body.data.map((s: any) => s.totalAmount);
+          expect(amounts).toEqual([1000, 500, 100]);
+        });
+
+        it("should sort by startAt asc", async () => {
+          seedSortableStreams();
+          const response = await request(app)
+            .get("/api/streams")
+            .query({ sort: "startAt", order: "asc" });
+          expect(response.status).toBe(200);
+          const startAts = response.body.data.map((s: any) => s.startAt);
+          for (let i = 1; i < startAts.length; i++) {
+            expect(startAts[i]).toBeGreaterThanOrEqual(startAts[i - 1]);
+          }
+        });
+
+        it("should sort by startAt desc", async () => {
+          seedSortableStreams();
+          const response = await request(app)
+            .get("/api/streams")
+            .query({ sort: "startAt", order: "desc" });
+          expect(response.status).toBe(200);
+          const startAts = response.body.data.map((s: any) => s.startAt);
+          for (let i = 1; i < startAts.length; i++) {
+            expect(startAts[i]).toBeLessThanOrEqual(startAts[i - 1]);
+          }
+        });
+
+        it("should sort by createdAt asc", async () => {
+          seedSortableStreams();
+          const response = await request(app)
+            .get("/api/streams")
+            .query({ sort: "createdAt", order: "asc" });
+          expect(response.status).toBe(200);
+          const createdAt = response.body.data.map((s: any) => s.createdAt);
+          for (let i = 1; i < createdAt.length; i++) {
+            expect(createdAt[i]).toBeGreaterThanOrEqual(createdAt[i - 1]);
+          }
+        });
+
+        it("should sort by createdAt desc (default)", async () => {
+          seedSortableStreams();
+          const response = await request(app)
+            .get("/api/streams")
+            .query({ sort: "createdAt", order: "desc" });
+          expect(response.status).toBe(200);
+          const createdAt = response.body.data.map((s: any) => s.createdAt);
+          for (let i = 1; i < createdAt.length; i++) {
+            expect(createdAt[i]).toBeLessThanOrEqual(createdAt[i - 1]);
+          }
+        });
+
+        it("should sort by durationSeconds asc", async () => {
+          seedSortableStreams();
+          const response = await request(app)
+            .get("/api/streams")
+            .query({ sort: "durationSeconds", order: "asc" });
+          expect(response.status).toBe(200);
+          const durations = response.body.data.map((s: any) => s.durationSeconds);
+          expect(durations).toEqual([100, 500, 1000]);
+        });
+
+        it("should sort by durationSeconds desc", async () => {
+          seedSortableStreams();
+          const response = await request(app)
+            .get("/api/streams")
+            .query({ sort: "durationSeconds", order: "desc" });
+          expect(response.status).toBe(200);
+          const durations = response.body.data.map((s: any) => s.durationSeconds);
+          expect(durations).toEqual([1000, 500, 100]);
+        });
+
+        it("should default to createdAt desc when no sort/order specified", async () => {
+          seedSortableStreams();
+          const response = await request(app)
+            .get("/api/streams");
+          expect(response.status).toBe(200);
+          const createdAt = response.body.data.map((s: any) => s.createdAt);
+          for (let i = 1; i < createdAt.length; i++) {
+            expect(createdAt[i]).toBeLessThanOrEqual(createdAt[i - 1]);
+          }
+        });
+
+        it("should return 400 for invalid sort field", async () => {
+          const response = await request(app)
+            .get("/api/streams")
+            .query({ sort: "invalidField" });
+          expect(response.status).toBe(400);
+          expect(response.body.error).toContain("sort must be one of");
+        });
+
+        it("should return 400 for invalid order", async () => {
+          const response = await request(app)
+            .get("/api/streams")
+            .query({ sort: "createdAt", order: "invalid" });
+          expect(response.status).toBe(400);
+          expect(response.body.error).toContain("order must be one of");
+        });
       });
     });
 
@@ -662,6 +967,400 @@ describe("Backend Integration Tests", () => {
         expect(response.body.total).toBe(0);
       });
     });
+
+    describe("GET /api/streams/sender/:address", () => {
+      it("should return streams for a valid sender address", async () => {
+        const response = await request(app)
+          .get(`/api/streams/sender/${mockStream.sender}`);
+
+        expect(response.status).toBe(200);
+        expect(response.body.data).toHaveLength(1);
+        expect(response.body.data[0].sender).toBe(mockStream.sender);
+        expect(response.body.data[0].progress).toBeDefined();
+        expect(response.body.total).toBe(1);
+      });
+
+      it("should return empty array for sender with no streams", async () => {
+        const emptySender = Keypair.random().publicKey();
+        const response = await request(app)
+          .get(`/api/streams/sender/${emptySender}`);
+
+        expect(response.status).toBe(200);
+        expect(response.body.data).toEqual([]);
+        expect(response.body.total).toBe(0);
+      });
+
+      it("should return 400 for invalid Stellar address format", async () => {
+        const response = await request(app)
+          .get("/api/streams/sender/invalid-address");
+
+        expect(response.status).toBe(400);
+        expect(response.body.error).toContain("must be a valid Stellar account ID");
+      });
+
+      it("should return 400 for address not starting with G", async () => {
+        const response = await request(app)
+          .get("/api/streams/sender/ABBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB");
+
+        expect(response.status).toBe(400);
+        expect(response.body.error).toContain("must be a valid Stellar account ID");
+      });
+
+      it("should support pagination", async () => {
+        const db = getDb();
+        for (let i = 2; i <= 4; i++) {
+          db.prepare(`
+            INSERT INTO streams (id, sender, recipient, asset_code, total_amount, duration_seconds, start_at, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          `).run(
+            i.toString(),
+            mockStream.sender,
+            mockStream.recipient,
+            mockStream.assetCode,
+            mockStream.totalAmount,
+            mockStream.durationSeconds,
+            mockStream.startAt,
+            mockStream.createdAt + i,
+          );
+        }
+
+        const response = await request(app)
+          .get(`/api/streams/sender/${mockStream.sender}`)
+          .query({ page: 1, limit: 2 });
+
+        expect(response.status).toBe(200);
+        expect(response.body.total).toBe(4);
+        expect(response.body.data).toHaveLength(2);
+        expect(response.body.page).toBe(1);
+        expect(response.body.limit).toBe(2);
+      });
+
+      it("should filter by status", async () => {
+        const response = await request(app)
+          .get(`/api/streams/sender/${mockStream.sender}`)
+          .query({ status: "scheduled" });
+
+        expect(response.status).toBe(200);
+        expect(response.body.data).toHaveLength(1);
+        expect(response.body.data[0].progress.status).toBe("scheduled");
+      });
+
+      it("should return 400 for invalid status query param", async () => {
+        const response = await request(app)
+          .get(`/api/streams/sender/${mockStream.sender}`)
+          .query({ status: "invalid" });
+
+        expect(response.status).toBe(400);
+        expect(response.body.error).toContain("status must be one of");
+      });
+    });
+
+    describe("GET /api/streams/recipient/:address", () => {
+      it("should return streams for a valid recipient address", async () => {
+        const response = await request(app)
+          .get(`/api/streams/recipient/${mockStream.recipient}`);
+
+        expect(response.status).toBe(200);
+        expect(response.body.data).toHaveLength(1);
+        expect(response.body.data[0].recipient).toBe(mockStream.recipient);
+        expect(response.body.data[0].progress).toBeDefined();
+        expect(response.body.total).toBe(1);
+      });
+
+      it("should return empty array for recipient with no streams", async () => {
+        const emptyRecipient = Keypair.random().publicKey();
+        const response = await request(app)
+          .get(`/api/streams/recipient/${emptyRecipient}`);
+
+        expect(response.status).toBe(200);
+        expect(response.body.data).toEqual([]);
+        expect(response.body.total).toBe(0);
+      });
+
+      it("should return 400 for invalid Stellar address format", async () => {
+        const response = await request(app)
+          .get("/api/streams/recipient/invalid-address");
+
+        expect(response.status).toBe(400);
+        expect(response.body.error).toContain("must be a valid Stellar account ID");
+      });
+
+      it("should return 400 for address not starting with G", async () => {
+        const response = await request(app)
+          .get("/api/streams/recipient/ABBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB");
+
+        expect(response.status).toBe(400);
+        expect(response.body.error).toContain("must be a valid Stellar account ID");
+      });
+
+      it("should support pagination", async () => {
+        const db = getDb();
+        for (let i = 2; i <= 4; i++) {
+          db.prepare(`
+            INSERT INTO streams (id, sender, recipient, asset_code, total_amount, duration_seconds, start_at, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          `).run(
+            i.toString(),
+            mockStream.sender,
+            mockStream.recipient,
+            mockStream.assetCode,
+            mockStream.totalAmount,
+            mockStream.durationSeconds,
+            mockStream.startAt,
+            mockStream.createdAt + i,
+          );
+        }
+
+        const response = await request(app)
+          .get(`/api/streams/recipient/${mockStream.recipient}`)
+          .query({ page: 1, limit: 2 });
+
+        expect(response.status).toBe(200);
+        expect(response.body.total).toBe(4);
+        expect(response.body.data).toHaveLength(2);
+        expect(response.body.page).toBe(1);
+        expect(response.body.limit).toBe(2);
+      });
+
+      it("should filter by status", async () => {
+        const response = await request(app)
+          .get(`/api/streams/recipient/${mockStream.recipient}`)
+          .query({ status: "scheduled" });
+
+        expect(response.status).toBe(200);
+        expect(response.body.data).toHaveLength(1);
+        expect(response.body.data[0].progress.status).toBe("scheduled");
+      });
+
+      it("should return 400 for invalid status query param", async () => {
+        const response = await request(app)
+          .get(`/api/streams/recipient/${mockStream.recipient}`)
+          .query({ status: "bogus" });
+
+        expect(response.status).toBe(400);
+        expect(response.body.error).toContain("status must be one of");
+      });
+    });
+
+    describe("POST /api/streams/:id/claim", () => {
+      let recipientKeypair: ReturnType<typeof Keypair.random>;
+      let senderKeypair: ReturnType<typeof Keypair.random>;
+      let claimStreamId: string;
+      let recipientToken: string;
+
+      beforeEach(() => {
+        recipientKeypair = Keypair.random();
+        senderKeypair = Keypair.random();
+        const now = Math.floor(Date.now() / 1000);
+        claimStreamId = "100";
+
+        const db = getDb();
+        db.prepare(`
+          INSERT INTO streams (id, sender, recipient, asset_code, total_amount, duration_seconds, start_at, created_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+          claimStreamId,
+          senderKeypair.publicKey(),
+          recipientKeypair.publicKey(),
+          "USDC",
+          1000,
+          3600,
+          now - 1800,
+          now - 1800,
+        );
+
+        recipientToken = jwt.sign(
+          { accountId: recipientKeypair.publicKey() },
+          getJwtSecret(),
+          { expiresIn: "1h" },
+        );
+      });
+
+      it("should allow the recipient to claim vested tokens", async () => {
+        const response = await request(app)
+          .post(`/api/streams/${claimStreamId}/claim`)
+          .set("Authorization", `Bearer ${recipientToken}`);
+
+        expect(response.status).toBe(200);
+        expect(response.body.result.claimedAmount).toBeGreaterThan(0);
+        expect(response.body.result.assetCode).toBe("USDC");
+        expect(response.body.result.txHash).toMatch(/^local-/);
+      });
+
+      it("should return 403 when a non-recipient tries to claim", async () => {
+        const nonRecipientToken = jwt.sign(
+          { accountId: senderKeypair.publicKey() },
+          getJwtSecret(),
+          { expiresIn: "1h" },
+        );
+
+        const response = await request(app)
+          .post(`/api/streams/${claimStreamId}/claim`)
+          .set("Authorization", `Bearer ${nonRecipientToken}`);
+
+        expect(response.status).toBe(403);
+        expect(response.body.code).toBe("FORBIDDEN");
+      });
+
+      it("should reject a second sequential claim on the same stream", async () => {
+        const first = await request(app)
+          .post(`/api/streams/${claimStreamId}/claim`)
+          .set("Authorization", `Bearer ${recipientToken}`);
+        expect(first.status).toBe(200);
+
+        const second = await request(app)
+          .post(`/api/streams/${claimStreamId}/claim`)
+          .set("Authorization", `Bearer ${recipientToken}`);
+        expect(second.status).toBe(409);
+        expect(second.body.code).toBe("ALREADY_CLAIMED");
+
+        const db = getDb();
+        const claimEvents = db
+          .prepare(`SELECT * FROM stream_events WHERE stream_id = ? AND event_type = 'claimed'`)
+          .all(claimStreamId);
+        expect(claimEvents).toHaveLength(1);
+      });
+
+      it("should prevent double-spend under concurrent claims", async () => {
+        const [res1, res2] = await Promise.all([
+          request(app)
+            .post(`/api/streams/${claimStreamId}/claim`)
+            .set("Authorization", `Bearer ${recipientToken}`),
+          request(app)
+            .post(`/api/streams/${claimStreamId}/claim`)
+            .set("Authorization", `Bearer ${recipientToken}`),
+        ]);
+
+        const statuses = [res1.status, res2.status].sort((a, b) => a - b);
+        expect(statuses).toEqual([200, 409]);
+
+        const db = getDb();
+        const claimEvents = db
+          .prepare(`SELECT * FROM stream_events WHERE stream_id = ? AND event_type = 'claimed'`)
+          .all(claimStreamId);
+        expect(claimEvents).toHaveLength(1);
+      });
+    });
+
+    describe("POST /api/streams/:id/reconcile", () => {
+      let senderKeypair: ReturnType<typeof Keypair.random>;
+      let reconcileStreamId: string;
+      let senderToken: string;
+      let testCounter = 0;
+
+      beforeEach(() => {
+        senderKeypair = Keypair.random();
+        const now = Math.floor(Date.now() / 1000);
+        reconcileStreamId = `200-${testCounter++}`;
+
+        const db = getDb();
+        db.prepare(`
+          INSERT INTO streams (id, sender, recipient, asset_code, total_amount, duration_seconds, start_at, created_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+          reconcileStreamId,
+          senderKeypair.publicKey(),
+          Keypair.random().publicKey(),
+          "USDC",
+          1000,
+          3600,
+          now - 1800,
+          now - 1800,
+        );
+
+        senderToken = jwt.sign(
+          { accountId: senderKeypair.publicKey() },
+          getJwtSecret(),
+          { expiresIn: "1h" },
+        );
+      });
+
+      it("should reconcile stream with on-chain state and update SQLite", async () => {
+        // Mock the Soroban get_stream response with updated on-chain state
+        mockSimulateTransaction.mockResolvedValue({
+          kind: "success",
+          result: {
+            retval: {
+              sender: senderKeypair.publicKey(),
+              recipient: Keypair.random().publicKey(),
+              token: "USDC",
+              total_amount: 1000,
+              start_time: Math.floor(Date.now() / 1000) - 1800,
+              end_time: Math.floor(Date.now() / 1000) + 1800,
+              canceled: true,
+              paused: false,
+              paused_at: null,
+              paused_duration: 0,
+              claimed_amount: 500,
+            },
+          },
+        });
+
+        const response = await request(app)
+          .post(`/api/streams/${reconcileStreamId}/reconcile`)
+          .set("Authorization", `Bearer ${senderToken}`);
+
+        expect(response.status).toBe(200);
+        expect(response.body.data.id).toBe(reconcileStreamId);
+        expect(response.body.data.canceledAt).toBeDefined();
+
+        // Verify SQLite was updated
+        const db = getDb();
+        const updatedStream = db
+          .prepare(`SELECT * FROM streams WHERE id = ?`)
+          .get(reconcileStreamId) as any;
+        expect(updatedStream.canceled_at).not.toBeNull();
+      });
+
+      it("should return 404 when stream not found on-chain", async () => {
+        mockSimulateTransaction.mockResolvedValue({
+          kind: "error",
+        });
+
+        const response = await request(app)
+          .post(`/api/streams/${reconcileStreamId}/reconcile`)
+          .set("Authorization", `Bearer ${senderToken}`);
+
+        expect(response.status).toBe(500);
+        expect(response.body.code).toBe("INTERNAL_ERROR");
+      });
+
+      it("should enforce rate limit (5 calls per stream per minute)", async () => {
+        mockSimulateTransaction.mockResolvedValue({
+          kind: "success",
+          result: {
+            retval: {
+              sender: senderKeypair.publicKey(),
+              recipient: Keypair.random().publicKey(),
+              token: "USDC",
+              total_amount: 1000,
+              start_time: Math.floor(Date.now() / 1000) - 1800,
+              end_time: Math.floor(Date.now() / 1000) + 1800,
+              canceled: false,
+              paused: false,
+              paused_at: null,
+              paused_duration: 0,
+              claimed_amount: 0,
+            },
+          },
+        });
+
+        // Make 5 successful requests
+        for (let i = 0; i < 5; i++) {
+          const response = await request(app)
+            .post(`/api/streams/${reconcileStreamId}/reconcile`)
+            .set("Authorization", `Bearer ${senderToken}`);
+          expect(response.status).toBe(200);
+        }
+
+        // 6th request should be rate limited
+        const response = await request(app)
+          .post(`/api/streams/${reconcileStreamId}/reconcile`)
+          .set("Authorization", `Bearer ${senderToken}`);
+        expect(response.status).toBe(429);
+        expect(response.body.code).toBe("RATE_LIMIT_EXCEEDED");
+      });
+    });
   });
 
   describe("Stream History", () => {
@@ -763,12 +1462,13 @@ describe("Backend Integration Tests", () => {
         `).run(completedStream.id, "created", completedStream.created_at, completedStream.sender);
 
         // Call refreshStreamStatuses to mark stream as completed and record event
-        const { refreshStreamStatuses } = await import("../services/streamStore");
+        const { refreshStreamStatuses } = await import("./services/streamStore");
         refreshStreamStatuses();
 
         // Verify stream is marked as completed
         const response = await request(app)
-          .get(`/api/streams/${completedStream.id}/history`);
+          .get(`/api/streams/${completedStream.id}/history`)
+          .query({ page: 1, pageSize: 50 });
 
         expect(response.status).toBe(200);
         expect(response.body.data).toHaveLength(2);

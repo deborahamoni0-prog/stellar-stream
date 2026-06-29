@@ -1,5 +1,18 @@
-
+import fs from "fs";
+import path from "path";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { logger } from "../logger";
+import { initDb, getDb } from "./db";
+import {
+    countDeadLetters,
+    getDeadLetters,
+    getRetryDelaySeconds,
+    requeueDeadLetter,
+    triggerWebhook,
+    validateWebhookUrl,
+} from "./webhook";
+
+const TEST_DB_PATH = path.join(__dirname, "..", "..", "data", "test-webhook.db");
 
 describe("Webhook Retry Logic", () => {
     it("should return correct retry delays", () => {
@@ -69,8 +82,8 @@ describe("Webhook triggerWebhook and getDeadLetters", () => {
         originalEnvUrl = process.env.WEBHOOK_DESTINATION_URL;
         process.env.WEBHOOK_DESTINATION_URL = "https://example.com/webhook";
         
-        vi.spyOn(console, 'log').mockImplementation(() => {});
-        vi.spyOn(console, 'error').mockImplementation(() => {});
+        vi.spyOn(logger, "info").mockImplementation(() => logger);
+        vi.spyOn(logger, "error").mockImplementation(() => logger);
     });
 
     afterEach(() => {
@@ -111,7 +124,10 @@ describe("Webhook triggerWebhook and getDeadLetters", () => {
         const count = db.prepare("SELECT count(*) as c FROM webhook_deliveries").get() as any;
         
         expect(count.c).toBe(0);
-        expect(console.log).toHaveBeenCalledWith(expect.stringContaining("WEBHOOK_DESTINATION_URL not set"));
+        expect(logger.info).toHaveBeenCalledWith(
+            { event: "test_event" },
+            expect.stringContaining("destination URL is not set"),
+        );
     });
 
     it("should early return when WEBHOOK_DESTINATION_URL is not allowed", async () => {
@@ -123,7 +139,10 @@ describe("Webhook triggerWebhook and getDeadLetters", () => {
         const count = db.prepare("SELECT count(*) as c FROM webhook_deliveries").get() as any;
 
         expect(count.c).toBe(0);
-        expect(console.error).toHaveBeenCalledWith(expect.stringContaining("private"));
+        expect(logger.error).toHaveBeenCalledWith(
+            expect.objectContaining({ reason: expect.stringContaining("private") }),
+            expect.stringContaining("destination URL is invalid"),
+        );
     });
 
     it("should early return and log error when stream_id is missing from data", async () => {
@@ -133,7 +152,10 @@ describe("Webhook triggerWebhook and getDeadLetters", () => {
         const count = db.prepare("SELECT count(*) as c FROM webhook_deliveries").get() as any;
         
         expect(count.c).toBe(0);
-        expect(console.error).toHaveBeenCalledWith(expect.stringContaining("Cannot map event test_event to a stream ID"), expect.anything());
+        expect(logger.error).toHaveBeenCalledWith(
+            expect.objectContaining({ event: "test_event" }),
+            expect.stringContaining("could not be mapped"),
+        );
     });
 
     it("should return dead letters ordered by failed_at DESC", () => {

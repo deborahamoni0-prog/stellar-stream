@@ -2,6 +2,29 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import { Stream } from "../types/stream";
 import { StreamEvent, getStream, getStreamHistory } from "../services/api";
 import { CopyableAddress } from "./CopyableAddress";
+import { CliffMarker } from "./CliffMarker";
+
+const STELLAR_EXPERT_BASE = "https://stellar.expert/explorer/testnet/tx";
+
+/**
+ * Renders a transaction hash as a truncated, clickable link to Stellar Expert.
+ * Shows first 8 + last 8 characters with the full hash in a tooltip.
+ */
+export function TxHashLink({ txHash }: { txHash: string }) {
+  const truncated = `${txHash.slice(0, 8)}…${txHash.slice(-8)}`;
+  return (
+    <a
+      href={`${STELLAR_EXPERT_BASE}/${txHash}`}
+      target="_blank"
+      rel="noopener noreferrer"
+      title={txHash}
+      className="tx-hash-link"
+      aria-label={`View transaction ${txHash} on Stellar Expert`}
+    >
+      <code>{truncated}</code>
+    </a>
+  );
+}
 
 interface StreamDetailDrawerProps {
   streamId: string;
@@ -9,6 +32,18 @@ interface StreamDetailDrawerProps {
   onClose: () => void;
   /** Called when cancel action is triggered from the drawer */
   onCancel?: (streamId: string) => Promise<void>;
+  /** Called when pause action is triggered from the drawer */
+  onPause?: (streamId: string) => Promise<void>;
+  /** Called when resume action is triggered from the drawer */
+  onResume?: (streamId: string) => Promise<void>;
+  /**
+   * Sign an arbitrary action payload before mutating actions.
+   * Receives { action, streamId, timestamp } and returns the signature.
+   * When not provided the action buttons are not shown.
+   */
+  signAction?: (payload: Record<string, unknown>) => Promise<string>;
+  /** The connected wallet address — used to gate sender-only actions */
+  walletAddress?: string | null;
 }
 
 function formatTs(unixSeconds: number): string {
@@ -61,13 +96,24 @@ function Skeleton({ width = "100%", height = "1rem" }: { width?: string; height?
   );
 }
 
-export function StreamDetailDrawer({ streamId, onClose, onCancel }: StreamDetailDrawerProps) {
+export function StreamDetailDrawer({
+  streamId,
+  onClose,
+  onCancel,
+  onPause,
+  onResume,
+  signAction,
+  walletAddress,
+}: StreamDetailDrawerProps) {
   const [stream, setStream] = useState<Stream | null>(null);
   const [history, setHistory] = useState<StreamEvent[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [canceling, setCanceling] = useState(false);
   const [cancelError, setCancelError] = useState<string | null>(null);
+  const [pausing, setPausing] = useState(false);
+  const [resuming, setResuming] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   // Abort controller to avoid race conditions on rapid open/close
   const abortRef = useRef<AbortController | null>(null);
@@ -140,7 +186,6 @@ export function StreamDetailDrawer({ streamId, onClose, onCancel }: StreamDetail
     setCancelError(null);
     try {
       await onCancel(stream.id);
-      // Refresh stream data after cancel
       await fetchData(stream.id);
     } catch (err) {
       setCancelError(err instanceof Error ? err.message : "Cancel failed.");
@@ -149,9 +194,59 @@ export function StreamDetailDrawer({ streamId, onClose, onCancel }: StreamDetail
     }
   }
 
+  async function handlePause() {
+    if (!stream || !onPause || !signAction) return;
+    setPausing(true);
+    setActionError(null);
+    try {
+      await signAction({ action: "pause", streamId: stream.id, timestamp: Date.now() });
+      await onPause(stream.id);
+      await fetchData(stream.id);
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : "Pause failed.");
+    } finally {
+      setPausing(false);
+    }
+  }
+
+  async function handleResume() {
+    if (!stream || !onResume || !signAction) return;
+    setResuming(true);
+    setActionError(null);
+    try {
+      await signAction({ action: "resume", streamId: stream.id, timestamp: Date.now() });
+      await onResume(stream.id);
+      await fetchData(stream.id);
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : "Resume failed.");
+    } finally {
+      setResuming(false);
+    }
+  }
+
   const isFinalised = stream
     ? stream.progress.status === "completed" || stream.progress.status === "canceled"
     : false;
+
+  // Sender-only action gate: wallet must be connected and match stream sender
+  const isSender =
+    !!walletAddress &&
+    !!stream &&
+    walletAddress === stream.sender;
+
+  const showPause =
+    isSender &&
+    !!onPause &&
+    !!signAction &&
+    stream?.progress.status === "active";
+
+  const showResume =
+    isSender &&
+    !!onResume &&
+    !!signAction &&
+    stream?.progress.status === "paused";
+
+  const hasActions = !!onCancel || showPause || showResume;
 
   return (
     <div
@@ -249,6 +344,12 @@ export function StreamDetailDrawer({ streamId, onClose, onCancel }: StreamDetail
                     <dt>Start</dt>
                     <dd>{formatTs(stream.startAt)}</dd>
                   </div>
+                  {stream.cliffSeconds != null && stream.cliffSeconds > 0 && (
+                    <div className="drawer-dl__row">
+                      <dt>Cliff Period</dt>
+                      <dd>{(stream.cliffSeconds / 86400).toFixed(1)} days ({stream.cliffSeconds}s)</dd>
+                    </div>
+                  )}
                   {stream.canceledAt && (
                     <div className="drawer-dl__row">
                       <dt>Canceled</dt>
@@ -257,6 +358,29 @@ export function StreamDetailDrawer({ streamId, onClose, onCancel }: StreamDetail
                   )}
                 </dl>
               </section>
+
+              {/* On-chain metadata */}
+              {stream.metadata && Object.keys(stream.metadata).length > 0 && (
+                <section className="drawer-section" aria-labelledby="drawer-onchain-meta-heading">
+                  <h3 id="drawer-onchain-meta-heading" className="drawer-section-title">On-chain Metadata</h3>
+                  <table className="drawer-metadata-table" aria-label="Stream metadata">
+                    <thead>
+                      <tr>
+                        <th>Key</th>
+                        <th>Value</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {Object.entries(stream.metadata).map(([key, value]) => (
+                        <tr key={key}>
+                          <td><code className="drawer-code">{key}</code></td>
+                          <td>{value}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </section>
+              )}
 
               {/* Progress section */}
               <section className="drawer-section" aria-labelledby="drawer-progress-heading">
@@ -267,15 +391,25 @@ export function StreamDetailDrawer({ streamId, onClose, onCancel }: StreamDetail
                     {stream.progress.vestedAmount} / {stream.totalAmount} {stream.assetCode} vested
                   </span>
                 </div>
-                <div
-                  className="progress-bar"
-                  role="progressbar"
-                  aria-valuenow={stream.progress.percentComplete}
-                  aria-valuemin={0}
-                  aria-valuemax={100}
-                  aria-label="Stream progress"
-                >
-                  <div style={{ width: `${Math.min(stream.progress.percentComplete, 100)}%` }} />
+                <div style={{ position: "relative", padding: "0.5rem 0" }}>
+                  {stream.cliffSeconds != null && stream.cliffSeconds > 0 && (
+                    <CliffMarker
+                      startAt={stream.startAt}
+                      cliffSeconds={stream.cliffSeconds}
+                      durationSeconds={stream.durationSeconds}
+                      now={Math.floor(Date.now() / 1000)}
+                    />
+                  )}
+                  <div
+                    className="progress-bar"
+                    role="progressbar"
+                    aria-valuenow={stream.progress.percentComplete}
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                    aria-label="Stream progress"
+                  >
+                    <div style={{ width: `${Math.min(stream.progress.percentComplete, 100)}%` }} />
+                  </div>
                 </div>
                 <dl className="drawer-dl" style={{ marginTop: "0.75rem" }}>
                   <div className="drawer-dl__row">
@@ -294,21 +428,57 @@ export function StreamDetailDrawer({ streamId, onClose, onCancel }: StreamDetail
               </section>
 
               {/* Actions */}
-              {onCancel && (
+              {hasActions && (
                 <section className="drawer-section" aria-labelledby="drawer-actions-heading">
                   <h3 id="drawer-actions-heading" className="drawer-section-title">Actions</h3>
+
                   {cancelError && (
                     <p className="drawer-cancel-error" role="alert">{cancelError}</p>
                   )}
-                  <button
-                    type="button"
-                    className="btn-ghost"
-                    disabled={isFinalised || canceling}
-                    onClick={handleCancel}
-                    aria-busy={canceling}
-                  >
-                    {canceling ? "Canceling…" : "Cancel Stream"}
-                  </button>
+                  {actionError && (
+                    <p className="drawer-cancel-error" role="alert">{actionError}</p>
+                  )}
+
+                  <div className="action-cell">
+                    {/* Pause — active streams, sender only */}
+                    {showPause && (
+                      <button
+                        type="button"
+                        className="btn-ghost"
+                        disabled={pausing}
+                        onClick={handlePause}
+                        aria-busy={pausing}
+                      >
+                        {pausing ? "Pausing…" : "⏸ Pause"}
+                      </button>
+                    )}
+
+                    {/* Resume — paused streams, sender only */}
+                    {showResume && (
+                      <button
+                        type="button"
+                        className="btn-ghost"
+                        disabled={resuming}
+                        onClick={handleResume}
+                        aria-busy={resuming}
+                      >
+                        {resuming ? "Resuming…" : "▶ Resume"}
+                      </button>
+                    )}
+
+                    {/* Cancel */}
+                    {onCancel && (
+                      <button
+                        type="button"
+                        className="btn-ghost"
+                        disabled={isFinalised || canceling}
+                        onClick={handleCancel}
+                        aria-busy={canceling}
+                      >
+                        {canceling ? "Canceling…" : "Cancel Stream"}
+                      </button>
+                    )}
+                  </div>
                 </section>
               )}
 
@@ -334,6 +504,9 @@ export function StreamDetailDrawer({ streamId, onClose, onCancel }: StreamDetail
                             {evt.actor && <span>· {evt.actor}</span>}
                             {evt.amount != null && (
                               <span>· {evt.amount} tokens</span>
+                            )}
+                            {evt.txHash && (
+                              <span>· <TxHashLink txHash={evt.txHash} /></span>
                             )}
                           </div>
                         </div>

@@ -51,6 +51,7 @@ export const createStreamPayloadSchema = z
     totalAmount: totalAmountSchema,
     durationSeconds: durationSecondsSchema,
     startAt: unixTimestampSchema.optional(),
+    cliffSeconds: z.coerce.number().int().nonnegative().optional(),
   })
   .superRefine((payload, ctx) => {
     if (payload.sender === payload.recipient) {

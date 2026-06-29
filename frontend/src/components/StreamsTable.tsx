@@ -2,11 +2,13 @@ import {
   memo,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
   type RefObject,
 } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { Stream } from "../types/stream";
 import { getExportCsvUrl, ListStreamsFilters, cancelStream } from "../services/api";
 import { CopyableAddress } from "./CopyableAddress";
@@ -19,6 +21,7 @@ import {
   useStreamTableColumns,
   type OptionalStreamColumn,
 } from "../hooks/useStreamTableColumns";
+import { useWebSocket } from "../hooks/useWebSocket";
 
 interface StreamsTableProps {
   streams: Stream[];
@@ -33,10 +36,21 @@ interface StreamsTableProps {
   // Optional props expected by App.tsx
   totalStreamCount?: number;
   onCreateStream?: () => void;
-
+  onLoadMore?: () => void;
+  hasMore?: boolean;
+  loadingMore?: boolean;
+  onRefreshStreams?: () => void;
+  setUrlFilters?: (filters: ListStreamsFilters) => void;
 }
 
 const SKELETON_ROW_COUNT = 6;
+/** Visible rows outside the viewport kept mounted for smooth scroll. */
+export const STREAMS_TABLE_VIRTUAL_OVERSCAN = 5;
+/** Only virtualize once lists are large enough to benefit from windowing. */
+const VIRTUALIZATION_THRESHOLD = 50;
+const ESTIMATE_ROW_HEIGHT_PX = 52;
+const TABLE_SCROLL_MAX_HEIGHT = "min(70vh, 720px)";
+const TABLE_SCROLL_VIEWPORT_HEIGHT = "480px";
 
 function SkeletonRow({ colCount }: { colCount: number }) {
   return (
@@ -87,10 +101,63 @@ export function StreamsTable({
   onResume,
   onEditStartTime,
   onOpenStream,
+  onLoadMore,
+  hasMore = true,
+  loadingMore = false,
+  onRefreshStreams,
+  setUrlFilters,
 }: StreamsTableProps) {
   const { visibility, toggleColumn, isVisible } = useStreamTableColumns();
   const [columnsOpen, setColumnsOpen] = useState(false);
   const columnsRef = useRef<HTMLDivElement>(null);
+  const sentinelRef = useRef<HTMLDivElement>(null);
+  const [streamProgressUpdates, setStreamProgressUpdates] = useState<Map<string, Stream["progress"]>>(new Map());
+
+  const wsUrl = import.meta.env.VITE_WS_URL ?? "";
+  const { readyState } = useWebSocket<{
+    type: string;
+    streamId?: string;
+    progress?: Stream["progress"];
+  }>(wsUrl, {
+    onMessage: (data) => {
+      if (data.type === "stream_progress" && data.streamId && data.progress) {
+        setStreamProgressUpdates((prev) => {
+          const next = new Map(prev);
+          next.set(data.streamId!, data.progress!);
+          return next;
+        });
+      }
+    },
+  });
+
+  const isWebSocketConnected = readyState === 1; // WebSocket.OPEN
+  const hasWebSocketUrl = wsUrl.length > 0;
+
+  // Poll for updates when WebSocket is disconnected and URL is configured
+  useEffect(() => {
+    if (isWebSocketConnected || !hasWebSocketUrl || !onRefreshStreams) {
+      return;
+    }
+    const interval = setInterval(() => {
+      onRefreshStreams();
+    }, 5000); // Poll every 5 seconds when disconnected
+    return () => clearInterval(interval);
+  }, [isWebSocketConnected, hasWebSocketUrl, onRefreshStreams]);
+
+  useEffect(() => {
+    const sentinel = sentinelRef.current;
+    if (!sentinel || !onLoadMore) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting && hasMore && !loadingMore) {
+          onLoadMore();
+        }
+      },
+      { rootMargin: "200px" },
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [onLoadMore, hasMore, loadingMore]);
 
   const [selectedStreamIds, setSelectedStreamIds] = useState<Set<string>>(new Set());
   const [expandedStreamId, setExpandedStreamId] = useState<string | null>(null);
@@ -102,6 +169,18 @@ export function StreamsTable({
   const sortedStreams = useMemo(
     () => [...streams].sort((a, b) => a.id.localeCompare(b.id)),
     [streams],
+  );
+
+  const streamsWithProgress = useMemo(
+    () =>
+      sortedStreams.map((stream) => {
+        const progressUpdate = streamProgressUpdates.get(stream.id);
+        if (progressUpdate) {
+          return { ...stream, progress: progressUpdate };
+        }
+        return stream;
+      }),
+    [sortedStreams, streamProgressUpdates],
   );
 
   const visibleOptionalColumns = useMemo(
@@ -206,10 +285,124 @@ export function StreamsTable({
     return () => document.removeEventListener("mousedown", onDocClick);
   }, [columnsOpen]);
 
+  const [scrollElement, setScrollElement] = useState<HTMLDivElement | null>(null);
+  const shouldVirtualize = !loading && sortedStreams.length >= VIRTUALIZATION_THRESHOLD;
+
+  const rowVirtualizer = useVirtualizer({
+    count: shouldVirtualize ? sortedStreams.length : 0,
+    getScrollElement: () => scrollElement,
+    estimateSize: () => ESTIMATE_ROW_HEIGHT_PX,
+    overscan: STREAMS_TABLE_VIRTUAL_OVERSCAN,
+    getItemKey: (index) => sortedStreams[index]?.id ?? index,
+    measureElement: (element) => {
+      const row = element as HTMLTableRowElement;
+      let height = row.getBoundingClientRect().height;
+      const timelineRow = row.nextElementSibling;
+      if (
+        timelineRow instanceof HTMLTableRowElement &&
+        timelineRow.dataset.timelineRow === "true"
+      ) {
+        height += timelineRow.getBoundingClientRect().height;
+      }
+      return height;
+    },
+  });
+
+  const virtualRows = rowVirtualizer.getVirtualItems();
+
+  const resolvedVirtualRows = useMemo(() => {
+    if (!shouldVirtualize) return [];
+
+    if (virtualRows.length > 0) return virtualRows;
+
+    const fallbackCount = Math.min(
+      sortedStreams.length,
+      Math.ceil(parseInt(TABLE_SCROLL_VIEWPORT_HEIGHT, 10) / ESTIMATE_ROW_HEIGHT_PX) +
+        STREAMS_TABLE_VIRTUAL_OVERSCAN,
+    );
+
+    return Array.from({ length: fallbackCount }, (_, index) => ({
+      index,
+      start: index * ESTIMATE_ROW_HEIGHT_PX,
+      end: (index + 1) * ESTIMATE_ROW_HEIGHT_PX,
+      size: ESTIMATE_ROW_HEIGHT_PX,
+      key: sortedStreams[index].id,
+      lane: 0,
+    }));
+  }, [shouldVirtualize, sortedStreams, virtualRows]);
+
+  useLayoutEffect(() => {
+    if (!shouldVirtualize || !scrollElement) return;
+    rowVirtualizer.measure();
+  }, [expandedStreamId, shouldVirtualize, scrollElement, visibleOptionalColumns, rowVirtualizer]);
+
+  const renderStreamRow = (
+    stream: Stream,
+    dataIndex: number,
+    measureRef?: (element: HTMLTableRowElement | null) => void,
+  ) => {
+    const progressUpdate = streamProgressUpdates.get(stream.id);
+    const streamWithProgress = progressUpdate ? { ...stream, progress: progressUpdate } : stream;
+    return (
+      <StreamRow
+        key={stream.id}
+        stream={streamWithProgress}
+        isScheduled={streamWithProgress.progress.status === "scheduled"}
+        isFinalised={
+          streamWithProgress.progress.status === "completed" ||
+          streamWithProgress.progress.status === "canceled"
+        }
+        isExpanded={expandedStreamId === stream.id}
+        healthBadges={getHealthBadges(streamWithProgress)}
+        isSelected={selectedStreamIds.has(stream.id)}
+        visibleOptionalColumns={visibleOptionalColumns}
+        colSpan={colCount}
+        measureRef={measureRef}
+        dataIndex={dataIndex}
+        onToggleTimeline={toggleTimeline}
+        onCheckboxToggle={handleCheckboxToggle}
+        onCancel={onCancel}
+        onPause={onPause}
+        onResume={onResume}
+        onEditStartTime={onEditStartTime}
+        onOpenStream={onOpenStream}
+      />
+    );
+  };
+
+  const paddingTop =
+    resolvedVirtualRows.length > 0 ? resolvedVirtualRows[0].start : 0;
+  const paddingBottom =
+    resolvedVirtualRows.length > 0
+      ? rowVirtualizer.getTotalSize() - resolvedVirtualRows[resolvedVirtualRows.length - 1].end
+      : 0;
+
   return (
     <>
+      {!isWebSocketConnected && hasWebSocketUrl && (
+        <div 
+          className="ws-disconnected-banner" 
+          role="status"
+          aria-live="polite"
+          style={{
+            background: "var(--bg-muted)",
+            border: "1px solid var(--border)",
+            borderRadius: "8px",
+            padding: "0.5rem 0.75rem",
+            marginBottom: "1rem",
+            fontSize: "0.85rem",
+            color: "var(--color-text)",
+            display: "flex",
+          alignItems: "center",
+          gap: "0.5rem",
+        }}
+        >
+          <span>⚠️</span>
+          <span>Live updates paused - using polling for progress updates</span>
+        </div>
+      )}
       <div className="card">
-        <FilterBar filters={filters} onChange={onFiltersChange} />
+        <FilterBar filters={filters} onChange={onFiltersChange} setUrlFilters={setUrlFilters} />
         <div
           className="streams-table-toolbar"
           style={{
@@ -283,9 +476,17 @@ export function StreamsTable({
           </div>
         </div>
 
-        <div style={{ overflowX: "auto" }}>
+        <div
+          ref={setScrollElement}
+          className="streams-table-scroll"
+          data-testid="streams-table-scroll"
+          style={{
+            maxHeight: TABLE_SCROLL_MAX_HEIGHT,
+            ...(shouldVirtualize ? { height: TABLE_SCROLL_VIEWPORT_HEIGHT } : {}),
+          }}
+        >
           <table aria-busy={loading} aria-label="Streams">
-            <thead>
+            <thead className="streams-table-head">
               <tr>
                 <th>
                   <input
@@ -309,35 +510,56 @@ export function StreamsTable({
               </tr>
             </thead>
             <tbody>
-              {loading
-                ? Array.from({ length: SKELETON_ROW_COUNT }, (_, i) => (
-                    <SkeletonRow key={i} colCount={colCount} />
-                  ))
-                : sortedStreams.map((stream) => (
-                    <StreamRow
-                      key={stream.id}
-                      stream={stream}
-                      isScheduled={stream.progress.status === "scheduled"}
-                      isFinalised={
-                        stream.progress.status === "completed" ||
-                        stream.progress.status === "canceled"
-                      }
-                      isExpanded={expandedStreamId === stream.id}
-                      healthBadges={getHealthBadges(stream)}
-                      isSelected={selectedStreamIds.has(stream.id)}
-                      visibleOptionalColumns={visibleOptionalColumns}
-                      colSpan={colCount}
-                      onToggleTimeline={toggleTimeline}
-                      onCheckboxToggle={handleCheckboxToggle}
-                      onCancel={onCancel}
-                      onPause={onPause}
-                      onResume={onResume}
-                      onEditStartTime={onEditStartTime}
-                      onOpenStream={onOpenStream}
-                    />
-                  ))}
+              {loading ? (
+                Array.from({ length: SKELETON_ROW_COUNT }, (_, i) => (
+                  <SkeletonRow key={i} colCount={colCount} />
+                ))
+              ) : shouldVirtualize ? (
+                <>
+                  {paddingTop > 0 && (
+                    <tr aria-hidden="true" className="streams-table-spacer">
+                      <td
+                        colSpan={colCount}
+                        style={{ height: paddingTop, padding: 0, border: "none" }}
+                      />
+                    </tr>
+                  )}
+                  {resolvedVirtualRows.map((virtualRow) =>
+                    renderStreamRow(
+                      streamsWithProgress[virtualRow.index],
+                      virtualRow.index,
+                      rowVirtualizer.measureElement,
+                    ),
+                  )}
+                  {paddingBottom > 0 && (
+                    <tr aria-hidden="true" className="streams-table-spacer">
+                      <td
+                        colSpan={colCount}
+                        style={{ height: paddingBottom, padding: 0, border: "none" }}
+                      />
+                    </tr>
+                  )}
+                </>
+              ) : (
+                streamsWithProgress.map((stream, index) => renderStreamRow(stream, index))
+              )}
             </tbody>
           </table>
+          <div
+            ref={sentinelRef}
+            style={{ height: 1 }}
+            data-testid="infinite-scroll-sentinel"
+          />
+          {loadingMore && (
+            <div style={{ textAlign: "center", padding: "1rem", color: "var(--color-muted)" }}>
+              Loading more streams...
+            </div>
+          )}
+          {!hasMore && streams.length > 0 && (
+            <div style={{ textAlign: "center", padding: "1rem", color: "var(--color-muted)" }}>
+              End of results
+            </div>
+          )}
         </div>
       </div>
 
@@ -395,6 +617,8 @@ interface StreamRowProps {
   healthBadges: ReturnType<typeof getHealthBadges>;
   visibleOptionalColumns: OptionalStreamColumn[];
   colSpan: number;
+  dataIndex: number;
+  measureRef?: (element: HTMLTableRowElement | null) => void;
   onToggleTimeline: (id: string) => void;
   onCheckboxToggle: (id: string) => void;
   onCancel: (id: string) => Promise<void>;
@@ -413,6 +637,8 @@ const StreamRow = memo(function StreamRow({
   healthBadges,
   visibleOptionalColumns,
   colSpan,
+  dataIndex,
+  measureRef,
   onToggleTimeline,
   onCheckboxToggle,
   onCancel,
@@ -428,7 +654,7 @@ const StreamRow = memo(function StreamRow({
 
   return (
     <>
-      <tr>
+      <tr ref={measureRef} data-index={dataIndex}>
         <td>
           <input
             type="checkbox"
@@ -549,7 +775,7 @@ const StreamRow = memo(function StreamRow({
       </tr>
 
       {isExpanded && (
-        <tr id={`timeline-${stream.id}`}>
+        <tr id={`timeline-${stream.id}`} data-timeline-row="true">
           <td
             colSpan={colSpan}
             style={{
@@ -569,5 +795,6 @@ const StreamRow = memo(function StreamRow({
   prev.isSelected === next.isSelected &&
   prev.isScheduled === next.isScheduled &&
   prev.isFinalised === next.isFinalised &&
-  prev.visibleOptionalColumns.join() === next.visibleOptionalColumns.join()
+  prev.dataIndex === next.dataIndex &&
+  prev.visibleOptionalColumns.join() === next.visibleOptionalColumns.join(),
 );

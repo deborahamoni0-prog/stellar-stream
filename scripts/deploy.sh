@@ -41,6 +41,15 @@ if ! command -v soroban &> /dev/null; then
     exit 1
 fi
 
+# Check if wasm-opt is installed (optional, but recommended for size optimization)
+if ! command -v wasm-opt &> /dev/null; then
+    echo -e "${YELLOW}Warning: wasm-opt is not installed${NC}"
+    echo "For WASM binary size optimization, install via:"
+    echo "  npm install -g wasm-opt  (or)"
+    echo "  brew install binaryen"
+    echo ""
+fi
+
 echo -e "${GREEN}Starting contract deployment...${NC}"
 echo "Network: Testnet"
 echo "RPC URL: $RPC_URL"
@@ -56,6 +65,22 @@ soroban contract build
 if [ $? -ne 0 ]; then
     echo -e "${RED}Error: Contract build failed${NC}"
     exit 1
+fi
+
+# Profile WASM binary size
+WASM_FILE="target/wasm32-unknown-unknown/release/stellar_stream.wasm"
+if [ -f "$WASM_FILE" ]; then
+    SIZE_BYTES=$(stat -f%z "$WASM_FILE" 2>/dev/null || stat -c%s "$WASM_FILE" 2>/dev/null || echo "0")
+    SIZE_KB=$(echo "scale=2; $SIZE_BYTES / 1024" | bc 2>/dev/null || echo "unknown")
+    echo -e "${GREEN}WASM binary size: ${SIZE_KB}KB (${SIZE_BYTES} bytes)${NC}"
+
+    # If wasm-opt is available, show optimization impact (dry run)
+    if command -v wasm-opt &> /dev/null; then
+        echo -e "${YELLOW}wasm-opt is available. Build script will optimize binary.${NC}"
+    fi
+    echo ""
+else
+    echo -e "${YELLOW}Warning: Could not find WASM binary at $WASM_FILE${NC}"
 fi
 
 echo -e "${GREEN}Contract built successfully${NC}"

@@ -3,6 +3,9 @@ import {
     stellarAccountIdSchema,
     webhookRegistrationSchema,
     isStellarPublicKey,
+    createStreamPayloadSchema,
+    totalAmountSchema,
+    durationSecondsSchema,
 } from "./schemas";
 
 describe("Stellar Account ID Validation", () => {
@@ -153,10 +156,174 @@ describe("Webhook Registration Schema", () => {
     it("should accept all valid event types", () => {
         const payload = {
             url: "https://example.com/webhooks",
-            events: ["created", "claimed", "canceled", "start_time_updated"],
+            events: ["created", "claimed", "canceled", "start_time_updated", "paused", "resumed"],
         };
 
         const result = webhookRegistrationSchema.safeParse(payload);
         expect(result.success).toBe(true);
+    });
+});
+
+describe("Create Stream Payload Schema", () => {
+    const validBasePayload = {
+        sender: "GCLJJD5FHTSEBHFXAA3BBTODUJ4RXDK6B3OSVNKY6TUHF76AQQT2WNFC",
+        recipient: "GBLHBYX72TJQH5EVPUN4ATAREH6TWYXQAH37MHNCVQG2NKLHFDSMFS3D",
+        assetCode: "USDC",
+        totalAmount: 100,
+        durationSeconds: 3600,
+    };
+
+    it("should accept valid stream creation payload", () => {
+        const result = createStreamPayloadSchema.safeParse(validBasePayload);
+        expect(result.success).toBe(true);
+    });
+
+    it("should accept stream with startAt in the future", () => {
+        const payload = {
+            ...validBasePayload,
+            startAt: Math.floor(Date.now() / 1000) + 3600,
+        };
+
+        const result = createStreamPayloadSchema.safeParse(payload);
+        expect(result.success).toBe(true);
+    });
+
+    it("should reject durationSeconds = 0", () => {
+        const payload = { ...validBasePayload, durationSeconds: 0 };
+        const result = createStreamPayloadSchema.safeParse(payload);
+        expect(result.success).toBe(false);
+        expect(result.error?.issues[0].path).toContain("durationSeconds");
+    });
+
+    it("should accept durationSeconds = 1 (minimum valid)", () => {
+        const payload = { ...validBasePayload, durationSeconds: 1 };
+        const result = createStreamPayloadSchema.safeParse(payload);
+        expect(result.success).toBe(true);
+    });
+
+    it("should reject totalAmount with more than 7 decimal places", () => {
+        const payload = { ...validBasePayload, totalAmount: 1.12345678 };
+        const result = createStreamPayloadSchema.safeParse(payload);
+        expect(result.success).toBe(false);
+        expect(result.error?.issues[0].message).toContain("7 decimal places");
+    });
+
+    it("should accept totalAmount with exactly 7 decimal places", () => {
+        const payload = { ...validBasePayload, totalAmount: 1.1234567 };
+        const result = createStreamPayloadSchema.safeParse(payload);
+        expect(result.success).toBe(true);
+    });
+
+    it("should reject recipient same as sender", () => {
+        const payload = { ...validBasePayload, recipient: validBasePayload.sender };
+        const result = createStreamPayloadSchema.safeParse(payload);
+        expect(result.success).toBe(false);
+        expect(result.error?.issues[0].path).toContain("recipient");
+        expect(result.error?.issues[0].message).toContain("differ");
+    });
+
+    it("should reject startAt more than 1 year in future", () => {
+        const payload = {
+            ...validBasePayload,
+            startAt: Math.floor(Date.now() / 1000) + (365 * 24 * 60 * 60) + 1,
+        };
+        const result = createStreamPayloadSchema.safeParse(payload);
+        expect(result.success).toBe(false);
+        expect(result.error?.issues[0].path).toContain("startAt");
+        expect(result.error?.issues[0].message).toContain("1 year");
+    });
+
+    it("should accept startAt exactly 1 year in future", () => {
+        const payload = {
+            ...validBasePayload,
+            startAt: Math.floor(Date.now() / 1000) + (365 * 24 * 60 * 60),
+        };
+        const result = createStreamPayloadSchema.safeParse(payload);
+        expect(result.success).toBe(true);
+    });
+
+    it("should reject negative totalAmount", () => {
+        const payload = { ...validBasePayload, totalAmount: -100 };
+        const result = createStreamPayloadSchema.safeParse(payload);
+        expect(result.success).toBe(false);
+    });
+
+    it("should reject zero totalAmount", () => {
+        const payload = { ...validBasePayload, totalAmount: 0 };
+        const result = createStreamPayloadSchema.safeParse(payload);
+        expect(result.success).toBe(false);
+    });
+
+    it("should reject missing required fields", () => {
+        const { sender, ...payloadWithoutSender } = validBasePayload;
+        const result = createStreamPayloadSchema.safeParse(payloadWithoutSender);
+        expect(result.success).toBe(false);
+    });
+});
+
+describe("Total Amount Schema", () => {
+    it("should reject amount with more than 7 decimal places", () => {
+        const result = totalAmountSchema.safeParse(1.12345678);
+        expect(result.success).toBe(false);
+    });
+
+    it("should accept amount with exactly 7 decimal places", () => {
+        const result = totalAmountSchema.safeParse(1.1234567);
+        expect(result.success).toBe(true);
+    });
+
+    it("should accept integer amounts", () => {
+        const result = totalAmountSchema.safeParse(100);
+        expect(result.success).toBe(true);
+    });
+
+    it("should reject non-positive amounts", () => {
+        const result = totalAmountSchema.safeParse(0);
+        expect(result.success).toBe(false);
+        const result2 = totalAmountSchema.safeParse(-1);
+        expect(result2.success).toBe(false);
+    });
+
+    it("should accept string numbers", () => {
+        const result = totalAmountSchema.safeParse("123.45");
+        expect(result.success).toBe(true);
+        if (result.success) {
+            expect(result.data).toBe(123.45);
+        }
+    });
+});
+
+describe("Duration Seconds Schema", () => {
+    it("should reject zero durationSeconds", () => {
+        const result = durationSecondsSchema.safeParse(0);
+        expect(result.success).toBe(false);
+    });
+
+    it("should accept 1 second as minimum valid duration", () => {
+        const result = durationSecondsSchema.safeParse(1);
+        expect(result.success).toBe(true);
+    });
+
+    it("should accept standard durations", () => {
+        const result = durationSecondsSchema.safeParse(3600);
+        expect(result.success).toBe(true);
+    });
+
+    it("should reject non-integer durations", () => {
+        const result = durationSecondsSchema.safeParse(1.5);
+        expect(result.success).toBe(false);
+    });
+
+    it("should reject negative durations", () => {
+        const result = durationSecondsSchema.safeParse(-100);
+        expect(result.success).toBe(false);
+    });
+
+    it("should accept string numbers", () => {
+        const result = durationSecondsSchema.safeParse("3600");
+        expect(result.success).toBe(true);
+        if (result.success) {
+            expect(result.data).toBe(3600);
+        }
     });
 });

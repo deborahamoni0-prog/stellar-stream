@@ -1,3 +1,5 @@
+import { logger } from "../logger";
+
 export interface OpenIssue {
   id: string;
   title: string;
@@ -17,7 +19,7 @@ export async function fetchOpenIssues(): Promise<OpenIssue[]> {
     });
 
     if (!response.ok) {
-      console.error(`Failed to fetch issues: ${response.status} ${response.statusText}`);
+      logger.error({ status: response.status, statusText: response.statusText }, "failed to fetch GitHub issues");
       return [];
     }
 
@@ -48,7 +50,7 @@ export async function fetchOpenIssues(): Promise<OpenIssue[]> {
       };
     });
   } catch (error) {
-    console.error("Error fetching GitHub issues:", error);
+    logger.error({ err: error }, "error fetching GitHub issues");
     return []; // Return empty array on failure so frontend doesn't crash completely
   }
 }

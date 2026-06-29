@@ -21,6 +21,8 @@ export interface Stream {
   canceledAt?: number;
   pausedAt?: number;
   pausedDuration?: number;
+  cliffSeconds?: number;
+  metadata?: Record<string, string> | null;
   progress: StreamProgress;
 }
 
@@ -31,6 +33,16 @@ export interface CreateStreamPayload {
   totalAmount: number;
   durationSeconds: number;
   startAt?: number;
+  cliffSeconds?: number;
+}
+
+export interface CreateSplitStreamPayload {
+  sender: string;
+  assetCode: string;
+  totalAmount: number;
+  durationSeconds: number;
+  startAt?: number;
+  recipients: { address: string; percentage: number }[];
 }
 
 export interface OpenIssue {

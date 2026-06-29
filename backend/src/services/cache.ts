@@ -1,4 +1,5 @@
 import Redis from "ioredis";
+import { logger } from "../logger";
 
 /**
  * Cache adapter interface for abstraction between in-memory and Redis implementations.
@@ -74,17 +75,17 @@ class RedisCache implements CacheAdapter {
 
         this.redis.on("connect", () => {
             this.connected = true;
-            console.log("✅ Redis cache connected");
+            logger.info("redis cache connected");
         });
 
         this.redis.on("error", (err) => {
-            console.warn("⚠️  Redis cache error:", err.message);
+            logger.warn({ err }, "redis cache error");
             this.connected = false;
         });
 
         this.redis.on("close", () => {
             this.connected = false;
-            console.warn("⚠️  Redis cache disconnected");
+            logger.warn("redis cache disconnected");
         });
     }
 
@@ -94,7 +95,7 @@ class RedisCache implements CacheAdapter {
             if (!value) return null;
             return JSON.parse(value);
         } catch (err) {
-            console.warn(`[cache] failed to get key ${key}:`, err);
+            logger.warn({ err, key }, "failed to get cache key");
             return null;
         }
     }
@@ -103,7 +104,7 @@ class RedisCache implements CacheAdapter {
         try {
             await this.redis.setex(key, ttlSeconds, JSON.stringify(value));
         } catch (err) {
-            console.warn(`[cache] failed to set key ${key}:`, err);
+            logger.warn({ err, key }, "failed to set cache key");
         }
     }
 
@@ -113,7 +114,7 @@ class RedisCache implements CacheAdapter {
             if (keys.length === 0) return 0;
             return await this.redis.del(...keys);
         } catch (err) {
-            console.warn(`[cache] failed to delete pattern ${pattern}:`, err);
+            logger.warn({ err, pattern }, "failed to delete cache pattern");
             return 0;
         }
     }
@@ -122,7 +123,7 @@ class RedisCache implements CacheAdapter {
         try {
             await this.redis.flushdb();
         } catch (err) {
-            console.warn("[cache] failed to clear cache:", err);
+            logger.warn({ err }, "failed to clear cache");
         }
     }
 
@@ -146,10 +147,10 @@ export function initCache(): CacheAdapter {
     const redisUrl = process.env.REDIS_URL;
 
     if (redisUrl) {
-        console.log("🔴 Initializing Redis cache...");
+        logger.info("initializing redis cache");
         cacheInstance = new RedisCache(redisUrl);
     } else {
-        console.log("💾 Using in-memory cache (set REDIS_URL for multi-instance deployments)");
+        logger.info("using in-memory cache");
         cacheInstance = new InMemoryCache();
     }
 

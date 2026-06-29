@@ -5,7 +5,7 @@ import { vi } from "vitest";
 let db: InstanceType<typeof Database>;
 vi.mock("./db", () => ({ getDb: () => db }));
 
-const { getStreamStats, resetStatsCache } = await import("./stats");
+const { getStreamStats, getGlobalStats, resetStatsCache } = await import("./stats");
 
 function setupDb() {
   db = new Database(":memory:");
@@ -127,5 +127,42 @@ describe("getStreamStats", () => {
     resetStatsCache();
     const fresh = getStreamStats();
     expect(fresh.total_streams).toBe(2);
+  });
+});
+
+describe("getGlobalStats – localStreamCount and onChainStreamCount", () => {
+  beforeEach(() => {
+    setupDb();
+    resetStatsCache();
+  });
+
+  it("returns localStreamCount=0 and onChainStreamCount=null with no streams", () => {
+    const stats = getGlobalStats();
+    expect(stats.localStreamCount).toBe(0);
+    expect(stats.onChainStreamCount).toBeNull();
+  });
+
+  it("returns localStreamCount=1 after a single stream is inserted", () => {
+    insert({ id: "s1" }, 1);
+    resetStatsCache();
+    const stats = getGlobalStats();
+    expect(stats.localStreamCount).toBe(1);
+  });
+
+  it("returns localStreamCount=N after N streams are inserted", () => {
+    for (let i = 0; i < 5; i++) {
+      insert({ id: `s${i}` }, i);
+    }
+    resetStatsCache();
+    const stats = getGlobalStats();
+    expect(stats.localStreamCount).toBe(5);
+  });
+
+  it("localStreamCount always equals total", () => {
+    insert({ id: "s1" }, 1);
+    insert({ id: "s2", canceled_at: NOW - 10 }, 2);
+    resetStatsCache();
+    const stats = getGlobalStats();
+    expect(stats.localStreamCount).toBe(stats.total);
   });
 });

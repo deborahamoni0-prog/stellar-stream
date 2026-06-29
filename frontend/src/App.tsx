@@ -1,5 +1,6 @@
 ﻿import { useEffect, useMemo, useState, useCallback, type RefObject } from "react";
 import { CreateStreamForm } from "./components/CreateStreamForm";
+import { DarkModeToggle } from "./components/DarkModeToggle";
 import { EditStartTimeModal } from "./components/EditStartTimeModal";
 import { IssueBacklog } from "./components/IssueBacklog";
 import { OfflineBanner } from "./components/OfflineBanner";
@@ -13,12 +14,15 @@ import { WalletButton } from "./components/WalletButton";
 import { useFreighter } from "./hooks/useFreighter";
 import { useMetricsHistory } from "./hooks/useMetricsHistory";
 import { defaultStreamFilters, useStreamFilter } from "./hooks/useStreamFilter";
+import { useTheme } from "./hooks/useTheme";
 import { useToast } from "./hooks/useToast";
 import { useWebSocket } from "./hooks/useWebSocket";
+import { useUrlFilters } from "./hooks/useUrlFilters";
 import {
   ApiError,
   cancelStream,
   createStream,
+  getWebSocketUrl,
   listOpenIssues,
   listStreams,
   pauseStream,
@@ -28,12 +32,11 @@ import {
 import { ListStreamsFilters } from "./services/api";
 import { OpenIssue, Stream } from "./types/stream";
 
-type ViewMode = "dashboard" | "recipient" | "sender";
-
 function App() {
   const wallet = useFreighter();
   const { showToast } = useToast();
-  const [viewMode, setViewMode] = useState<ViewMode>("dashboard");
+  const { view: viewMode, filters: urlFilters, setFilters: setUrlFilters, setView: setViewMode } = useUrlFilters();
+  const { theme, toggleTheme } = useTheme();
   const [detailStreamId, setDetailStreamId] = useState<string | null>(null);
   const [streams, setStreams] = useState<Stream[]>([]);
   const [issues, setIssues] = useState<OpenIssue[]>([]);
@@ -45,31 +48,27 @@ function App() {
   const [loadingDashboard, setLoadingDashboard] = useState(true);
   const [initialLoading, setInitialLoading] = useState(true);
   const [totalUnfilteredCount, setTotalUnfilteredCount] = useState<number>(0);
-  const [theme, setTheme] = useState<"light" | "dark">("light");
   const CREATE_STREAM_SECTION_ID = "create-stream-section";
 
   const scrollToCreateStream = useCallback(() => {
     document.getElementById(CREATE_STREAM_SECTION_ID)?.scrollIntoView({ behavior: "smooth" });
   }, []);
 
-  const toggleTheme = useCallback(() => {
-    setTheme((current) => (current === "light" ? "dark" : "light"));
-  }, []);
-
-  useEffect(() => {
-    document.documentElement.dataset.theme = theme;
-  }, [theme]);
-
   const { filters, filteredStreams, setFilter } = useStreamFilter(streams);
-  const wsUrl = import.meta.env.VITE_WS_URL ?? "";
+  const [hasMore, setHasMore] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+
+  const wsUrl = getWebSocketUrl();
   const { lastMessage } = useWebSocket<{
     eventType?: string;
     type?: string;
     status?: string;
     streamId?: string;
+    vestedAmount?: number;
+    percentComplete?: number;
   }>(wsUrl);
 
-  const { data: metricsHistory } = useMetricsHistory("7d");
+  const metricsHistory = useMetricsHistory("7d");
 
   const metrics = useMemo(
     () => {
@@ -89,12 +88,14 @@ function App() {
 
   const apiFilters: ListStreamsFilters = useMemo(
     () => ({
-      status: filters.status,
-      sender: filters.sender,
-      recipient: filters.recipient,
-      asset: filters.assetCode,
+      status: filters.status || urlFilters.status,
+      sender: filters.sender || urlFilters.sender,
+      recipient: filters.recipient || urlFilters.recipient,
+      asset: filters.assetCode || urlFilters.asset,
+      sort: filters.sort || urlFilters.sort,
+      page: filters.page > 1 ? filters.page : (urlFilters.page ?? undefined),
     }),
-    [filters],
+    [urlFilters, filters],
   );
 
   const tableFilters: ListStreamsFilters = useMemo(
@@ -109,14 +110,29 @@ function App() {
   );
 
   async function refreshStreams(currentFilters: ListStreamsFilters): Promise<void> {
-    const data = await listStreams(currentFilters);
-    setStreams(data);
+    const result = await listStreams({ ...currentFilters, limit: 20 });
+    setStreams(result.data);
+    setHasMore(result.page * result.limit < result.total);
+  }
+
+  async function loadMore(): Promise<void> {
+    if (loadingMore || !hasMore) return;
+    setLoadingMore(true);
+    try {
+      const currentPage = urlFilters.page ?? 1;
+      const nextPage = currentPage + 1;
+      const result = await listStreams({ ...apiFilters, page: nextPage, limit: 20 });
+      setStreams((prev) => [...prev, ...result.data]);
+      setHasMore(result.page * result.limit < result.total);
+    } finally {
+      setLoadingMore(false);
+    }
   }
 
   async function refreshUnfilteredCount(): Promise<void> {
     try {
-      const all = await listStreams();
-      setTotalUnfilteredCount(all.length);
+      const all = await listStreams({ limit: 1 });
+      setTotalUnfilteredCount(all.total);
     } catch {
       // Ignore count errors; feature is best-effort.
     }
@@ -150,19 +166,36 @@ function App() {
 
   useEffect(() => {
     if (!lastMessage) return;
-    const eventKind = lastMessage.eventType ?? lastMessage.type ?? "";
+    const eventKind = lastMessage.type ?? "";
     if (!eventKind) return;
 
-    if (eventKind.includes("created")) {
-      showToast("Stream created", "success");
-    } else if (eventKind.includes("cancel")) {
-      showToast("Stream canceled", "info");
-    } else if (eventKind.includes("complete")) {
-      showToast("Stream completed", "success");
-    }
+    if (eventKind === "stream_progress") {
+      setStreams((prev) =>
+        prev.map((stream) =>
+          stream.id === lastMessage.streamId
+            ? {
+                ...stream,
+                progress: {
+                  ...stream.progress,
+                  vestedAmount: lastMessage.vestedAmount ?? stream.progress.vestedAmount,
+                  percentComplete: lastMessage.percentComplete ?? stream.progress.percentComplete,
+                },
+              }
+            : stream,
+        ),
+      );
+    } else {
+      if (eventKind.includes("created")) {
+        showToast("Stream created", "success");
+      } else if (eventKind.includes("cancel")) {
+        showToast("Stream canceled", "info");
+      } else if (eventKind.includes("complete")) {
+        showToast("Stream completed", "success");
+      }
 
-    void refreshStreams(apiFilters);
-    void refreshUnfilteredCount();
+      void refreshStreams(apiFilters);
+      void refreshUnfilteredCount();
+    }
   }, [apiFilters, lastMessage, showToast]);
 
   async function handleCreate(
@@ -263,15 +296,7 @@ function App() {
             <h1>StellarStream</h1>
           </div>
 
-          <button
-            type="button"
-            className="btn-ghost"
-            onClick={toggleTheme}
-            style={{ marginRight: "0.5rem", fontSize: "1.2rem", minHeight: "36px", display: "flex", alignItems: "center" }}
-            aria-label="Toggle Dark Mode"
-          >
-            {theme === "light" ? "🌙" : "☀️"}
-          </button>
+          <DarkModeToggle theme={theme} onToggle={toggleTheme} />
 
           <WalletButton wallet={wallet} />
         </div>
@@ -339,7 +364,11 @@ function App() {
 
           <section className="chart-section">
             <h2 className="chart-section__title">Stream Metrics Trends</h2>
-            <StreamMetricsChart data={metricsHistory} />
+            <StreamMetricsChart
+              data={metricsHistory.data}
+              loading={metricsHistory.loading}
+              error={metricsHistory.error}
+            />
           </section>
 
           <section className="layout-grid">
@@ -361,6 +390,7 @@ function App() {
                 setFilter("recipient", next.recipient ?? defaultStreamFilters.recipient);
                 setFilter("assetCode", next.asset ?? defaultStreamFilters.assetCode);
               }}
+              setUrlFilters={setUrlFilters}
               onCancel={handleCancel}
               onPause={handlePause}
               onResume={handleResume}
@@ -368,6 +398,10 @@ function App() {
                 setEditingStream({ stream, triggerRef })
               }
               onOpenStream={setDetailStreamId}
+              onLoadMore={loadMore}
+              hasMore={hasMore}
+              loadingMore={loadingMore}
+              onRefreshStreams={() => refreshStreams(apiFilters)}
             />
           </section>
 
@@ -392,6 +426,10 @@ function App() {
               streamId={detailStreamId}
               onClose={() => setDetailStreamId(null)}
               onCancel={handleCancel}
+              onPause={handlePause}
+              onResume={handleResume}
+              signAction={wallet.signAction}
+              walletAddress={wallet.address}
             />
           )}
         </>
