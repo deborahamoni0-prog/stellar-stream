@@ -455,12 +455,15 @@ export function calculateProgress(
   const elapsed = Math.max(0, Math.min(effectiveAt - stream.startAt - stream.pausedDuration, stream.durationSeconds));
 
   const ratio = Math.min(1, elapsed / stream.durationSeconds);
+  const elapsed = Math.max(0, Math.max(0, effectiveAt - stream.startAt) - stream.pausedDuration);
+  const ratio = stream.durationSeconds <= 0 ? 1 : Math.min(1, elapsed / stream.durationSeconds);
+  const elapsedSeconds = stream.durationSeconds <= 0 ? 0 : Math.min(elapsed, stream.durationSeconds);
   const vestedAmount = stream.totalAmount * ratio;
 
   return {
     status: computeStatus(stream, at),
-    ratePerSecond: round(stream.totalAmount / stream.durationSeconds),
-    elapsedSeconds: elapsed,
+    ratePerSecond: stream.durationSeconds <= 0 ? Infinity : round(stream.totalAmount / stream.durationSeconds),
+    elapsedSeconds,
     vestedAmount: round(vestedAmount),
     remainingAmount: round(Math.max(0, stream.totalAmount - vestedAmount)),
     percentComplete: round(ratio * 100),

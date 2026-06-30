@@ -7,6 +7,7 @@ import type { Request, Response } from "express";
 describe("requestLogger", () => {
   const originalNodeEnv = process.env.NODE_ENV;
   const loggerInfoSpy = vi.spyOn(logger, "info").mockImplementation(() => logger);
+  vi.spyOn(logger, "child").mockImplementation(() => logger);
 
   beforeEach(() => {
     loggerInfoSpy.mockClear();
@@ -29,6 +30,7 @@ describe("requestLogger", () => {
 
     const res = new EventEmitter() as Response;
     (res as any).statusCode = 201;
+    (res as any).setHeader = vi.fn();
 
     const next = vi.fn();
 

@@ -23,6 +23,7 @@ import {
   getStreamHistory,
   countStreamEvents,
   getStreamEventSummary,
+  StreamEventType,
 } from "./services/eventHistory";
 import { fetchOpenIssues } from "./services/openIssues";
 import {
@@ -283,7 +284,6 @@ app.use(helmet({
     preload: true,
   },
 }));
-app.use(cors());
 const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS;
 
 if (ALLOWED_ORIGINS) {
@@ -589,25 +589,27 @@ app.get("/api/events", readLimiter, (req: Request, res: Response) => {
   }
 
   const query = parsedQuery.data;
-  const hasPage = req.query.page !== undefined;
-  const hasLimit = req.query.limit !== undefined;
 
-  const eventType = query.eventType as Parameters<typeof getGlobalEvents>[2];
-  const total = countAllEvents(eventType);
+  const eventType = query.eventType as StreamEventType | undefined;
+  const streamId = query.streamId;
+  const since = query.since;
+
+  const total = countAllEvents(eventType, streamId, since);
 
   const page = query.page ?? PAGINATION_DEFAULT_PAGE;
-  const limit =
-    !hasPage && !hasLimit ? total : (query.limit ?? PAGINATION_DEFAULT_LIMIT);
+  const pageSize = query.pageSize ?? query.limit ?? PAGINATION_DEFAULT_LIMIT;
 
-  const offset = (page - 1) * limit;
+  const offset = (page - 1) * pageSize;
   const data = getGlobalEvents(
-    limit === 0 ? 0 : limit,
+    pageSize,
     offset,
     eventType,
     query.cursor,
+    streamId,
+    since,
   );
 
-  res.json({ data, total, page, limit });
+  res.json({ data, total, page, pageSize, limit: pageSize });
 });
 
 app.get(
