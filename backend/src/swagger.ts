@@ -1635,6 +1635,109 @@ export const swaggerDocument = {
         },
       },
     },
+    "/api/events": {
+      get: {
+        summary: "List All Events",
+        description:
+          "Retrieves all stream events across all streams with pagination and optional filtering by event type, stream ID, and timestamp.",
+        parameters: [
+          {
+            name: "page",
+            in: "query",
+            required: false,
+            description: "Page number (default: 1).",
+            schema: { type: "integer", minimum: 1 },
+          },
+          {
+            name: "pageSize",
+            in: "query",
+            required: false,
+            description: "Number of events per page (default: 20, max: 100).",
+            schema: { type: "integer", minimum: 1, maximum: 100 },
+          },
+          {
+            name: "limit",
+            in: "query",
+            required: false,
+            description: "Alias for pageSize. If both are provided, pageSize takes precedence.",
+            schema: { type: "integer", minimum: 1, maximum: 100 },
+          },
+          {
+            name: "eventType",
+            in: "query",
+            required: false,
+            description: "Filter by event type: created, claimed, canceled, paused, resumed, start_time_updated, completed.",
+            schema: {
+              type: "string",
+              enum: ["created", "claimed", "canceled", "paused", "resumed", "start_time_updated", "completed"],
+            },
+          },
+          {
+            name: "streamId",
+            in: "query",
+            required: false,
+            description: "Filter by stream ID.",
+            schema: { type: "string" },
+          },
+          {
+            name: "since",
+            in: "query",
+            required: false,
+            description: "Filter to events after this unix timestamp (in seconds).",
+            schema: { type: "integer" },
+          },
+          {
+            name: "cursor",
+            in: "query",
+            required: false,
+            description: "Cursor for cursor-based pagination (event ID).",
+            schema: { type: "integer" },
+          },
+        ],
+        responses: {
+          "200": {
+            description: "Paginated list of events.",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    data: {
+                      type: "array",
+                      items: {
+                        $ref: "#/components/schemas/StreamEvent",
+                      },
+                    },
+                    total: {
+                      type: "integer",
+                      description: "Total number of events matching the filters.",
+                    },
+                    page: {
+                      type: "integer",
+                      description: "Current page number.",
+                    },
+                    pageSize: {
+                      type: "integer",
+                      description: "Number of events per page.",
+                    },
+                  },
+                },
+              },
+            },
+          },
+          "400": {
+            description: "Validation error — invalid query parameters.",
+            content: {
+              "application/json": {
+                schema: {
+                  $ref: "#/components/schemas/Error",
+                },
+              },
+            },
+          },
+        },
+      },
+    },
     "/api/open-issues": {
       get: {
         summary: "Get Open Issues",

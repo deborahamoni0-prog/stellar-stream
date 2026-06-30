@@ -403,3 +403,59 @@ describe('StreamDetailDrawer', () => {
     });
   });
 });
+
+// ── Stellar Expert transaction links (#399) ──────────────────────────────────
+
+describe('TxHashLink — Stellar Expert transaction links (#399)', () => {
+  beforeEach(() => {
+    onClose.mockClear();
+    clearCache();
+  });
+
+  it('renders txHash as a link to Stellar Expert testnet', async () => {
+    render(<StreamDetailDrawer streamId="42" onClose={onClose} />);
+    await waitFor(() => expect(screen.getByText('Tokens claimed')).toBeInTheDocument());
+
+    const link = screen.getByRole('link', { name: /View transaction.*Stellar Expert/i });
+    expect(link).toHaveAttribute(
+      'href',
+      'https://stellar.expert/explorer/testnet/tx/abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890ab',
+    );
+  });
+
+  it('link opens in a new tab with rel=noopener noreferrer', async () => {
+    render(<StreamDetailDrawer streamId="42" onClose={onClose} />);
+    await waitFor(() => expect(screen.getByText('Tokens claimed')).toBeInTheDocument());
+
+    const link = screen.getByRole('link', { name: /View transaction/i });
+    expect(link).toHaveAttribute('target', '_blank');
+    expect(link).toHaveAttribute('rel', 'noopener noreferrer');
+  });
+
+  it('displays truncated hash (first 8 + last 8 chars)', async () => {
+    render(<StreamDetailDrawer streamId="42" onClose={onClose} />);
+    await waitFor(() => expect(screen.getByText('Tokens claimed')).toBeInTheDocument());
+
+    // full: abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890ab
+    expect(screen.getByText('abcdef12\u2026567890ab')).toBeInTheDocument();
+  });
+
+  it('full hash is in the tooltip (title attribute)', async () => {
+    render(<StreamDetailDrawer streamId="42" onClose={onClose} />);
+    await waitFor(() => expect(screen.getByText('Tokens claimed')).toBeInTheDocument());
+
+    const link = screen.getByRole('link', { name: /View transaction/i });
+    expect(link).toHaveAttribute(
+      'title',
+      'abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890ab',
+    );
+  });
+
+  it('does not render a tx link when txHash is absent', async () => {
+    render(<StreamDetailDrawer streamId="42" onClose={onClose} />);
+    await waitFor(() => expect(screen.getByText('Stream created')).toBeInTheDocument());
+    // "created" event has no txHash — only the "claimed" event has a link
+    const links = screen.queryAllByRole('link', { name: /View transaction/i });
+    expect(links.length).toBeLessThanOrEqual(1);
+  });
+});

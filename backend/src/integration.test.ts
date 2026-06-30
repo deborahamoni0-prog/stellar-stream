@@ -1608,6 +1608,81 @@ describe("Backend Integration Tests", () => {
         expect(streamIds.has("2")).toBe(true);
         expect(streamIds.has("3")).toBe(true);
       });
+
+      it("should filter by streamId", async () => {
+        const response = await request(app)
+          .get("/api/events")
+          .query({ streamId: "1" });
+
+        expect(response.status).toBe(200);
+        expect(response.body.data).toHaveLength(2);
+        expect(response.body.total).toBe(2);
+        response.body.data.forEach((e: any) => {
+          expect(e.streamId).toBe("1");
+        });
+      });
+
+      it("should filter by since timestamp", async () => {
+        const now = Math.floor(Date.now() / 1000);
+        // Events were inserted at now+1, now+2, now+3 (created) and now+100 (canceled)
+        // Filtering since now+50 should only return the canceled event
+        const response = await request(app)
+          .get("/api/events")
+          .query({ since: now + 50 });
+
+        expect(response.status).toBe(200);
+        expect(response.body.data).toHaveLength(1);
+        expect(response.body.data[0].eventType).toBe("canceled");
+      });
+
+      it("should use pageSize parameter (default 20)", async () => {
+        const response = await request(app)
+          .get("/api/events")
+          .query({ pageSize: 2 });
+
+        expect(response.status).toBe(200);
+        expect(response.body.data).toHaveLength(2);
+        expect(response.body.pageSize).toBe(2);
+        expect(response.body.total).toBe(4);
+        expect(response.body.page).toBe(1);
+      });
+
+      it("should combine eventType and streamId filters", async () => {
+        const response = await request(app)
+          .get("/api/events")
+          .query({ eventType: "created", streamId: "1" });
+
+        expect(response.status).toBe(200);
+        expect(response.body.data).toHaveLength(1);
+        expect(response.body.total).toBe(1);
+        expect(response.body.data[0].eventType).toBe("created");
+        expect(response.body.data[0].streamId).toBe("1");
+      });
+
+      it("should combine eventType, streamId, and since filters", async () => {
+        const now = Math.floor(Date.now() / 1000);
+        const response = await request(app)
+          .get("/api/events")
+          .query({ eventType: "created", streamId: "1", since: now });
+
+        expect(response.status).toBe(200);
+        expect(response.body.data).toHaveLength(1);
+        expect(response.body.total).toBe(1);
+        expect(response.body.data[0].eventType).toBe("created");
+        expect(response.body.data[0].streamId).toBe("1");
+      });
+
+      it("should paginate with pageSize", async () => {
+        const response = await request(app)
+          .get("/api/events")
+          .query({ page: 1, pageSize: 2 });
+
+        expect(response.status).toBe(200);
+        expect(response.body.data).toHaveLength(2);
+        expect(response.body.total).toBe(4);
+        expect(response.body.page).toBe(1);
+        expect(response.body.pageSize).toBe(2);
+      });
     });
   });
 

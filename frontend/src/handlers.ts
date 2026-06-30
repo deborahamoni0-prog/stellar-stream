@@ -62,6 +62,7 @@ export const handlers = [
           timestamp: 1700010000,
           actor: 'GRECIPIENT456',
           amount: 100,
+          txHash: 'abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890ab',
         },
       ],
     });

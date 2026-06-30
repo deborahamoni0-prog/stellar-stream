@@ -4,6 +4,28 @@ import { StreamEvent, getStream, getStreamHistory } from "../services/api";
 import { CopyableAddress } from "./CopyableAddress";
 import { CliffMarker } from "./CliffMarker";
 
+const STELLAR_EXPERT_BASE = "https://stellar.expert/explorer/testnet/tx";
+
+/**
+ * Renders a transaction hash as a truncated, clickable link to Stellar Expert.
+ * Shows first 8 + last 8 characters with the full hash in a tooltip.
+ */
+export function TxHashLink({ txHash }: { txHash: string }) {
+  const truncated = `${txHash.slice(0, 8)}…${txHash.slice(-8)}`;
+  return (
+    <a
+      href={`${STELLAR_EXPERT_BASE}/${txHash}`}
+      target="_blank"
+      rel="noopener noreferrer"
+      title={txHash}
+      className="tx-hash-link"
+      aria-label={`View transaction ${txHash} on Stellar Expert`}
+    >
+      <code>{truncated}</code>
+    </a>
+  );
+}
+
 interface StreamDetailDrawerProps {
   streamId: string;
   /** Called when the drawer should close */
@@ -482,6 +504,9 @@ export function StreamDetailDrawer({
                             {evt.actor && <span>· {evt.actor}</span>}
                             {evt.amount != null && (
                               <span>· {evt.amount} tokens</span>
+                            )}
+                            {evt.txHash && (
+                              <span>· <TxHashLink txHash={evt.txHash} /></span>
                             )}
                           </div>
                         </div>
